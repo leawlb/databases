@@ -1,0 +1,667 @@
+---
+author: "lea wölbert"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Preparations
+
+```{r libraries, message = FALSE}
+
+library(rlist)
+library(CellChat)
+library(tidyr)
+
+```
+
+## Load Data
+
+```{r load_convtables, message = FALSE}
+
+hgnc_conv <- read.delim(file = "../../data/databases/hgnc_complete_set.txt", 
+                        header = TRUE)
+
+mgi_conv <- read.delim(
+  file = "../../data//databases/HGNC_AllianceHomology.rpt.txt",
+  header = TRUE)
+
+```
+
+```{r load_dbs, message = FALSE}
+
+ccdb <- CellChatDB.mouse
+mjdb <- read.csv(file = "../../data/databases/db_MJ.csv", 
+                 header = TRUE, sep = ";")
+nmdb <- read.csv(file = "../../data/databases/db_natmi.csv", 
+                 header = TRUE, sep = ",")
+scdb <- read.csv(file = "../../data/databases/db_scagecom_m.csv", 
+                 header = TRUE, sep = ";")
+rmdb <- read.csv(file = "../../data/databases/db_rnamagnet.csv", 
+                 header = TRUE, sep = ";")
+
+```
+
+```{r load_lrdb, message = FALSE}
+
+lrdb <- list.load(file = "../../data/databases/lrdb_003.rds")
+
+```
+
+```{r load_lrdb, message = FALSE}
+
+insp_ref <- list.load(file = "../../data/databases/insp_ref_comp.rds")
+insp_ref_shared <- list.load(file = "../../data/databases/insp_ref_shared.rds")
+
+```
+
+
+# Compare to remaining DBs
+ 
+To get an idea if the interactions contain more or less what is required,
+compare to the two remaining databases that were not used as source.
+
+I will make addition of further data dependent on mapping to insp_ref_shared,
+since only genes contained in that database are of interest further on.
+
+## SCDB
+
+```{r compare_scdb, message = FALSE}
+
+# change scdb to make comparison easier
+scdb_comp <- scdb
+scdb_comp$LRI <- gsub(":", "&", scdb_comp$LRI)
+
+```
+
+```{r compare_scdb_mono, message = FALSE}
+
+# create df  with only monomeric interactions from scdb
+scdb_comp_mono <- scdb_comp[scdb_comp$LIGAND_2 == "",]
+scdb_comp_mono <- scdb_comp_mono[scdb_comp_mono$RECEPTOR_2 == "",]
+scdb_comp_mono <- scdb_comp_mono[scdb_comp_mono$RECEPTOR_2 == "",]
+
+# compare with lrdb
+table(is.na(match(lrdb$interactions$interaction_pair, scdb_comp_mono$LRI)))
+table(is.na(match(scdb_comp_mono$LRI, lrdb$interactions$interaction_pair)))
+# around 1800 monomeric interactions are shared
+# both dbs have around 1800 monomeric interactions not found in the other
+
+# subset into non-matched interactions
+scdb_comp_mono_na <- scdb_comp_mono
+scdb_comp_mono_na <- scdb_comp_mono_na[which(is.na(match(
+  scdb_comp_mono$LRI, lrdb$interactions$interaction_pair))),]
+scdb_comp_mono_na <- scdb_comp_mono_na[, c(1,2,4)]
+  
+# compare to insp_ref_shared
+scdb_comp_mono_na$ligand_id <- mgi_conv$NCBI.Gene.strand[
+  match(scdb_comp_mono_na$LIGAND_1, mgi_conv$MGI.Accession.ID)]
+
+scdb_comp_mono_na$receptor_id <- mgi_conv$NCBI.Gene.strand[
+  match(scdb_comp_mono_na$RECEPTOR_1, mgi_conv$MGI.Accession.ID)]
+
+table(is.na(match(scdb_comp_mono_na$ligand_id, 
+                  insp_ref_shared$ids$ensembl_mbl6_id)))
+table(is.na(match(scdb_comp_mono_na$receptor_id, 
+                  insp_ref_shared$ids$ensembl_mbl6_id)))
+# around 1400 ligand and receptor IDs are found in insp_ref_shared
+pos_lig_shared <- which(!is.na(match(scdb_comp_mono_na$ligand_id, 
+                  insp_ref_shared$ids$ensembl_mbl6_id)))
+pos_rec_shared <- which(!is.na(match(scdb_comp_mono_na$receptor_id, 
+                  insp_ref_shared$ids$ensembl_mbl6_id)))
+table(is.na(match(pos_lig_shared, pos_rec_shared)))
+table(is.na(match(pos_rec_shared, pos_lig_shared)))
+# a total of around 1170 interactions has ids in insp_ref_shared for
+# both ligand and receptors and is not found in lrdb
+
+# subset into insp_ref_shared-contained monomeric non-matching interactions
+shared_scdb_comp_mono_na <- scdb_comp_mono_na
+shared_scdb_comp_mono_na <- shared_scdb_comp_mono_na[
+  which(!is.na(match(pos_lig_shared, pos_rec_shared))),]
+table(duplicated(shared_scdb_comp_mono_na$LRI))
+
+# could add around 1500 new unique monomeric interactions
+# think about whether I should add those since they're not annotated at all
+# and may not be significant to BM
+
+```
+
+
+```{r compare_scdb_multi_dfs, message = FALSE}
+# create df  with only monomeric interactions from scdb
+# make different dfs for different situations
+multi_pos_llr <- c(which(scdb_comp$LIGAND_2 != ""))
+
+multi_pos_lrr <- c(which(scdb_comp$LIGAND_2 != ""),
+                   which(scdb_comp$RECEPTOR_2 == ""),
+                   which(scdb_comp$RECEPTOR_3 != ""))
+multi_pos_lrrr <- c(which(scdb_comp$LIGAND_2 != ""),
+                    which(scdb_comp$RECEPTOR_2 == ""),
+                    which(scdb_comp$RECEPTOR_3 == ""))
+multi_pos_llrr <- c(which(scdb_comp$LIGAND_2 == ""),
+                    which(scdb_comp$RECEPTOR_2 == ""),
+                    which(scdb_comp$RECEPTOR_3 != ""))
+multi_pos_llrrr <- c(which(scdb_comp$LIGAND_2 != ""),
+                     which(scdb_comp$RECEPTOR_2 != ""),
+                     which(scdb_comp$RECEPTOR_3 != ""))                   
+
+scdb_multi_llr <- scdb_comp[multi_pos_llr,]
+scdb_multi_llrrr <- scdb_multi_llr[scdb_multi_llr$RECEPTOR_3 != "",]
+scdb_multi_llrr <- scdb_multi_llr[scdb_multi_llr$RECEPTOR_2 != "",]
+scdb_multi_llrr <- scdb_multi_llrr[scdb_multi_llrr$RECEPTOR_3 == "",]
+scdb_multi_llr <- scdb_multi_llr[scdb_multi_llr$RECEPTOR_2 == "",]
+
+nrow(scdb_multi_llr)
+nrow(scdb_multi_llrr)
+nrow(scdb_multi_llrrr)
+
+scdb_multi_lrr <- scdb_comp[-multi_pos_llr,]
+scdb_multi_lrr <- scdb_multi_lrr[scdb_multi_lrr$RECEPTOR_2 != "",]
+scdb_multi_lrr <- scdb_multi_lrr[scdb_multi_lrr$RECEPTOR_3 == "",]
+scdb_multi_lrrr <- scdb_multi_lrr[scdb_multi_lrr$RECEPTOR_3 != "",]
+
+nrow(scdb_multi_lrr)
+nrow(scdb_multi_lrrr)
+
+```
+
+The LRR interactions are by far the most numerous.
+
+```{r split_llr, message = FALSE}
+
+# split llr
+scdb_multi_llr_split <- separate_rows(scdb_multi_llr, LRI, sep = "_")
+scdb_multi_llr_split$LRI[-grep("&", scdb_multi_llr_split$LRI)] <- paste(
+  scdb_multi_llr_split$LRI[-grep("&", scdb_multi_llr_split$LRI)], 
+  scdb_multi_llr_split$RECEPTOR_1[-grep("&", scdb_multi_llr_split$LRI)], 
+  sep = "&")
+
+table(duplicated(scdb_multi_llr_split$LRI))
+table(is.na(match(scdb_multi_llr_split$LRI, 
+                  lrdb$interactions$interaction_pair)))
+table(is.na(match(lrdb$interactions$interaction_pair, 
+                  scdb_multi_llr_split$LRI)))
+# 8 of those interactions are not in lrdb
+# so that doesn't give much benefit
+
+```
+
+```{r split_llrr, message = FALSE}
+
+# split llrr
+scdb_multi_llrr_split <- scdb_multi_llrr
+scdb_multi_llrr_split$lri1 <- paste(scdb_multi_llrr$LIGAND_1, 
+                              scdb_multi_llrr$RECEPTOR_1, sep = "&")
+scdb_multi_llrr_split$lri2 <- paste(scdb_multi_llrr$LIGAND_1, 
+                              scdb_multi_llrr$RECEPTOR_2, sep = "&")
+scdb_multi_llrr_split$lri3 <- paste(scdb_multi_llrr$LIGAND_2, 
+                              scdb_multi_llrr$RECEPTOR_1, sep = "&")
+scdb_multi_llrr_split$lri4 <- paste(scdb_multi_llrr$LIGAND_2, 
+                              scdb_multi_llrr$RECEPTOR_2, sep = "&")
+
+scdb_multi_llrr_split$lri1[duplicated(scdb_multi_llrr_split$lri1) == TRUE] <- ""
+scdb_multi_llrr_split$lri2[duplicated(scdb_multi_llrr_split$lri2) == TRUE] <- ""
+scdb_multi_llrr_split$lri3[duplicated(scdb_multi_llrr_split$lri3) == TRUE] <- ""
+scdb_multi_llrr_split$lri4[duplicated(scdb_multi_llrr_split$lri4) == TRUE] <- ""
+# there are matches between the cols but they are <10
+
+table(is.na(match(scdb_multi_llrr_split$lri1, 
+                  lrdb$interactions$interaction_pair)))
+table(is.na(match(scdb_multi_llrr_split$lri2, 
+                  lrdb$interactions$interaction_pair)))
+table(is.na(match(scdb_multi_llrr_split$lri3, 
+                  lrdb$interactions$interaction_pair)))
+table(is.na(match(scdb_multi_llrr_split$lri4, 
+                  lrdb$interactions$interaction_pair)))
+# of each type around 10 interactions are not found in lrdb
+
+```
+
+```{r split_lrr, message = FALSE}
+
+# split scdb_multi_lrr
+scdb_multi_lrr
+scdb_multi_lrr_split <- separate_rows(scdb_multi_lrr, LRI, sep = "_")
+scdb_multi_lrr_split$LRI[-grep("&", scdb_multi_lrr_split$LRI)] <- paste(
+  scdb_multi_lrr_split$LIGAND_1[-grep("&", scdb_multi_lrr_split$LRI)], 
+  scdb_multi_lrr_split$LRI[-grep("&", scdb_multi_lrr_split$LRI)], sep = "&")
+
+table(duplicated(scdb_multi_lrr_split$LRI))
+scdb_multi_lrr_split <- scdb_multi_lrr_split[duplicated(
+  scdb_multi_lrr_split$LRI) == FALSE,]
+table(is.na(match(scdb_multi_lrr_split$LRI, 
+                  lrdb$interactions$interaction_pair)))
+# actually, the majority of this is already found in lrdb,
+# only 140 additional  unique interactions in scdb
+
+scdb_multi_lrr_split[is.na(match(scdb_multi_lrr_split$LRI, 
+                                 lrdb$interactions$interaction_pair)),]
+# lots of collagens, integrins, and wnt pathway members
+
+# compare to insp_ref
+# compare to insp_ref_shared
+scdb_multi_lrr_split$ligand_id <- mgi_conv$NCBI.Gene.strand[
+  match(scdb_multi_lrr_split$LIGAND_1, mgi_conv$MGI.Accession.ID)]
+
+scdb_multi_lrr_split$receptor1_id <- mgi_conv$NCBI.Gene.strand[
+  match(scdb_multi_lrr_split$RECEPTOR_1, mgi_conv$MGI.Accession.ID)]
+
+scdb_multi_lrr_split$receptor2_id <- mgi_conv$NCBI.Gene.strand[
+  match(scdb_multi_lrr_split$RECEPTOR_2, mgi_conv$MGI.Accession.ID)]
+
+table(is.na(match(unique(scdb_multi_lrr_split$ligand_id), 
+                  insp_ref_shared$ids$ensembl_mbl6_id)))
+table(is.na(match(unique(scdb_multi_lrr_split$receptor1_id), 
+                  insp_ref_shared$ids$ensembl_mbl6_id)))
+table(is.na(match(unique(scdb_multi_lrr_split$receptor2_id), 
+                  insp_ref_shared$ids$ensembl_mbl6_id)))
+# a majority is in insp_ref_shared
+
+pos_lig_shared <- which(!is.na(match(unique(scdb_multi_lrr_split$ligand_id), 
+                  insp_ref_shared$ids$ensembl_mbl6_id)))
+pos_rec1_shared <- which(!is.na(match(unique(scdb_multi_lrr_split$receptor1_id), 
+                  insp_ref_shared$ids$ensembl_mbl6_id)))
+pos_rec2_shared <- which(!is.na(match(unique(scdb_multi_lrr_split$receptor2_id), 
+                  insp_ref_shared$ids$ensembl_mbl6_id)))
+
+table(is.na(match(pos_lig_shared, pos_rec1_shared)))
+table(is.na(match(pos_lig_shared, pos_rec2_shared)))
+# but only around 60 of LR combinations are both found in insp_ref_shared
+
+```
+
+I decided not to add any further interactions, since the benefit is not
+worth the additional effort and time.
+
+# Add IDs
+
+For many ligands and receptors ensembl IDs and symbols are missing.
+Make use of mgi_conv and hgnc_conv
+
+Technically not needed but more convenient:
+
+```{r load_lrdb2, message = FALSE}
+
+lrdb <- list.load(file = "../../data/databases/lrdb_003.rds")
+
+```
+
+## Ligands
+
+### ENSEMBL IDs
+
+```{r add_ensid_ligands, message = FALSE}
+
+# ensembl IDs stored in: mgi_conv$NCBI.Gene.strand
+# symbols stored in: MGI.Accession.ID
+# HGNC IDs stored in: CCDS.IDs
+
+head(lrdb$ligands[lrdb$ligands$ligand_ensembl_id == "",])
+missing_l <- lrdb$ligands$ligand_symbol[lrdb$ligands$ligand_ensembl_id == ""]
+missing_l_uni <- missing_l[duplicated(missing_l) == FALSE]
+missing_l_pos <- which(lrdb$ligands$ligand_ensembl_id == "")
+length(missing_l_uni)
+# around 550 unique ligands do not have ensembl id
+
+table(is.na(match(missing_l_uni, mgi_conv$MGI.Accession.ID)))
+table(is.na(match(mgi_conv$MGI.Accession.ID, missing_l_uni)))
+# around 500 ensembl IDs can be added
+
+# get the corresponding positions from mgi_conv
+mgi_l_pos_uni <- which(!is.na(match(mgi_conv$MGI.Accession.ID, missing_l_uni)))
+head(mgi_conv[mgi_l_pos,])
+length(mgi_l_pos)
+# check if worked
+unique(lrdb$ligands$ligand_ensembl_id[missing_l_pos])
+
+# get number match to sort mgi according to lrdb
+sort_mgi_l <- match(lrdb$ligands$ligand_symbol[missing_l_pos],
+                    mgi_conv$MGI.Accession.ID[mgi_l_pos_uni])
+table(is.na(sort_mgi_l))
+
+lrdb$ligands$ligand_ensembl_id[missing_l_pos] <- mgi_conv$NCBI.Gene.strand[
+  mgi_l_pos_uni][sort_mgi_l]
+head(lrdb$ligands[missing_l_pos,])
+
+```
+
+```{r remove_lig_nas, message = FALSE}
+
+# improve_ only NAs
+unique(lrdb$ligands$ligand_ensembl_id[-grep("ENSMUS", 
+                                            lrdb$ligands$ligand_ensembl_id)])
+lrdb$ligands$ligand_ensembl_id[
+  lrdb$ligands$ligand_ensembl_id == "null"] <- NA
+table(is.na(lrdb$ligands$ligand_ensembl_id))
+# 47 rows of ligands  (23 ligands total) do not have an ensembl ID
+na_ligands <- unique(lrdb$ligands$ligand_symbol[
+  is.na(lrdb$ligands$ligand_ensembl_id)])
+length(na_ligands)
+
+lrdb$interactions <- lrdb$interactions[is.na(match(lrdb$ligands$ligand_symbol,
+                                                   na_ligands )),]
+lrdb$sources <- lrdb$sources[is.na(match(lrdb$ligands$ligand_symbol,
+                                         na_ligands )),]
+lrdb$receptors <- lrdb$receptors[is.na(match(lrdb$ligands$ligand_symbol,
+                                             na_ligands )),]
+lrdb$ligands <- lrdb$ligands[is.na(match(lrdb$ligands$ligand_symbol,
+                                         na_ligands )),]
+
+unique(lrdb$ligands$ligand_ensembl_id[-grep("ENSMUS", 
+                                            lrdb$ligands$ligand_ensembl_id)])
+table(is.na(lrdb$ligands$ligand_ensembl_id))
+# no more NAs
+
+```
+
+### HGNC info
+
+```{r add_hgnc_ligands, message = FALSE}
+
+# first hgnc ids
+mgi_l_pos <- which(!is.na(match(mgi_conv$NCBI.Gene.strand, 
+                                lrdb$ligands$ligand_ensembl_id)))
+table(is.na(match(mgi_conv$NCBI.Gene.strand, lrdb$ligands$ligand_ensembl_id)))
+length(mgi_l_pos)
+length(unique(lrdb$ligands$ligand_ensembl_id))
+
+sort_mgi_l2 <- match(lrdb$ligands$ligand_ensembl_id,
+                    mgi_conv$NCBI.Gene.strand[mgi_l_pos])
+
+lrdb$ligands$ligand_hgnc_id <- mgi_conv$CCDS.IDs[mgi_l_pos][sort_mgi_l2]
+
+# then hgnc symbols
+hgnc_l_pos <- which(!is.na(match(hgnc_conv$hgnc_id, 
+                                 lrdb$ligands$ligand_hgnc_id)))
+table(is.na(match(hgnc_conv$hgnc_id, lrdb$ligands$ligand_hgnc_id)))
+length(hgnc_l_pos)
+length(unique(lrdb$ligands$ligand_hgnc_id))
+
+sort_hgnc_l <- match(lrdb$ligands$ligand_hgnc_id,
+                    hgnc_conv$hgnc_id[hgnc_l_pos])
+
+lrdb$ligands$ligand_hgnc_symbol_h <- hgnc_conv$symbol[hgnc_l_pos][sort_hgnc_l]
+head(lrdb$ligands)
+
+lrdb$ligands$ligand_hgnc_id[lrdb$ligands$ligand_hgnc_id == "null"] <- NA
+table(is.na(lrdb$ligands$ligand_hgnc_id))
+table(is.na(lrdb$ligands$ligand_hgnc_symbol_h))
+
+```
+
+## Receptors
+
+### ENSEMBL IDs
+
+```{r add_ensid_ligands, message = FALSE}
+
+head(lrdb$receptors[lrdb$receptors$receptor_ensembl_id == "",])
+missing_r <- lrdb$receptors$receptor_symbol[
+  lrdb$receptors$receptor_ensembl_id == ""]
+missing_r_uni <- missing_r[duplicated(missing_r) == FALSE]
+missing_r_pos <- which(lrdb$receptors$receptor_ensembl_id == "")
+length(missing_r_uni)
+# around 500 unique receptors do not have ensembl id
+
+table(is.na(match(missing_r_uni, mgi_conv$MGI.Accession.ID)))
+table(is.na(match(mgi_conv$MGI.Accession.ID, missing_r_uni)))
+# around 460 ensembl IDs can be added
+
+# get the corresponding positions from mgi_conv
+mgi_r_pos_uni <- which(!is.na(match(mgi_conv$MGI.Accession.ID, missing_r_uni)))
+head(mgi_conv[mgi_r_pos,])
+length(mgi_r_pos)
+# check if worked
+unique(lrdb$receptors$receptor_ensembl_id[missing_r_pos])
+
+# get number match to sort mgi according to lrdb
+sort_mgi_r <- match(lrdb$receptors$receptor_symbol[missing_r_pos],
+                    mgi_conv$MGI.Accession.ID[mgi_r_pos_uni])
+table(is.na(sort_mgi_r))
+
+lrdb$receptors$receptor_ensembl_id[missing_r_pos] <- mgi_conv$NCBI.Gene.strand[
+  mgi_r_pos_uni][sort_mgi_r]
+head(lrdb$receptors[missing_r_pos,])
+
+```
+
+```{r remove_rec_nas, message = FALSE}
+
+# improve_ only NAs
+unique(lrdb$receptors$receptor_ensembl_id[-grep(
+  "ENSMUS", lrdb$receptors$receptor_ensembl_id)])
+table(is.na(lrdb$receptors$receptor_ensembl_id))
+# 27 rows of receptorsdo not have an ensembl ID (20 receptors total)
+na_receptors <- unique(lrdb$receptors$receptor_symbol[
+  is.na(lrdb$receptors$receptor_ensembl_id)])
+length(na_receptors)
+
+lrdb$interactions <- lrdb$interactions[is.na(match(
+  lrdb$receptors$receptor_symbol, na_receptors )),]
+lrdb$sources <- lrdb$sources[is.na(match(lrdb$receptors$receptor_symbol, 
+                                         na_receptors )),]
+lrdb$ligands <- lrdb$ligands[is.na(match(lrdb$receptors$receptor_symbol,
+                                         na_receptors )),]
+lrdb$receptors <- lrdb$receptors[is.na(match(lrdb$receptors$receptor_symbol, 
+                                             na_receptors )),]
+
+unique(lrdb$receptors$receptor_ensembl_id[-grep("ENSMUS", 
+                                            rdb$receptors$receptor_ensembl_id)])
+table(is.na(lrdb$receptors$receptor_ensembl_id))
+# no more NAs
+
+```
+
+```{r add_hgnc_receptors message = FALSE}
+
+# first hgnc ids
+mgi_r_pos <- which(!is.na(match(mgi_conv$NCBI.Gene.strand, 
+                                lrdb$receptors$receptor_ensembl_id)))
+table(is.na(match(mgi_conv$NCBI.Gene.strand, 
+                  lrdb$receptors$receptor_ensembl_id)))
+length(mgi_r_pos)
+length(unique(lrdb$receptors$receptor_ensembl_id))
+# around 800 hgnc ids can be added
+
+sort_mgi_r2 <- match(lrdb$receptors$receptor_ensembl_id,
+                    mgi_conv$NCBI.Gene.strand[mgi_r_pos])
+
+lrdb$receptors$receptor_hgnc_id <- mgi_conv$CCDS.IDs[mgi_r_pos][sort_mgi_r2]
+
+# then hgnc symbols
+hgnc_r_pos <- which(!is.na(match(hgnc_conv$hgnc_id, 
+                                 lrdb$receptors$receptor_hgnc_id)))
+table(is.na(match(hgnc_conv$hgnc_id, lrdb$receptors$receptor_hgnc_id)))
+length(hgnc_r_pos)
+length(unique(lrdb$receptors$receptor_hgnc_id))
+#around 700-800 HGNC symbols can be added
+
+sort_hgnc_r <- match(lrdb$receptors$receptor_hgnc_id,
+                    hgnc_conv$hgnc_id[hgnc_r_pos])
+
+lrdb$receptors$receptor_hgnc_symbol_h <- hgnc_conv$symbol[
+  hgnc_r_pos][sort_hgnc_r]
+head(lrdb$receptors)
+
+lrdb$receptors$receptor_hgnc_id[lrdb$receptors$receptor_hgnc_id == "null"] <- NA
+table(is.na(lrdb$receptors$receptor_hgnc_id))
+table(is.na(lrdb$receptors$receptor_hgnc_id))
+
+```
+
+NAs in HGNC symbols are not so bad.
+
+## Add Info to Rest
+
+```{r add_info, message = FALSE}
+
+lrdb$interactions$ligand_symbol <- lrdb$ligands$ligand_symbol
+lrdb$interactions$ligand_ensembl_id <- lrdb$ligands$ligand_ensembl_id
+
+lrdb$interactions$receptor_symbol <- lrdb$receptors$receptor_symbol
+lrdb$interactions$receptor_ensembl_id <- lrdb$receptors$receptor_ensembl_id
+
+tail(lrdb$interactions)
+tail(lrdb$sources)
+tail(lrdb$ligands)
+tail(lrdb$receptors)
+
+```
+
+```{r checkpoint3_save, message = FALSE}
+
+list.save(lrdb, file = "../../data/databases/lrdb_004.rds")
+
+```
+
+```{r checkpoint3_load, message = FALSE}
+
+lrdb <- list.load(file = "../../data/databases/lrdb_004.rds")
+
+```
+
+# Compare to insp_ref_shared
+
+```{r comp_insp_ref_shared, message = FALSE}
+
+# number of matching ligands/receptors
+table(is.na(match(unique(lrdb$ligands$ligand_ensembl_id),
+                  insp_ref_shared$ids$ensembl_mbl6_id)))
+table(is.na(lrdb$ligands$ligand_ensembl_id))
+table(duplicated(lrdb$ligands$ligand_ensembl_id))
+# most ligands are duplicated
+
+table(is.na(match(unique(lrdb$receptors$receptor_ensembl_id), 
+                  insp_ref_shared$ids$ensembl_mbl6_id)))
+
+# number of matching rows
+table(is.na(match(lrdb$ligands$ligand_ensembl_id,
+                  insp_ref_shared$ids$ensembl_mbl6_id)))
+table(is.na(match(lrdb$receptors$receptor_ensembl_id,
+                  insp_ref_shared$ids$ensembl_mbl6_id)))
+
+```
+
+## Ligands
+
+```{r ligands_tb_discarded, message = FALSE}
+
+lrdb$ligands[(is.na(match(lrdb$ligands$ligand_ensembl_id, 
+                          insp_ref_shared$ids$ensembl_mbl6_id))),]
+l_tbd <- unique(lrdb$ligands$ligand_symbol[
+  (is.na(match(lrdb$ligands$ligand_ensembl_id, 
+               insp_ref_shared$ids$ensembl_mbl6_id)))])
+length(l_tbd)
+l_tbd
+# 122 receptors to be removed
+
+```
+
+```{r discard_ligands_rows, message = FALSE}
+
+# get the rows of ligands to discard
+
+l_tbd_pos <- which(!is.na(match(lrdb$ligands$ligand_symbol, l_tbd)))
+length(l_tbd_pos)
+lrdb$interactions[l_tbd_pos,]
+
+# 300 rows to be removed
+lrdb$interactions <- lrdb$interactions[-l_tbd_pos,]
+lrdb$sources <- lrdb$sources[-l_tbd_pos,]
+lrdb$ligands <- lrdb$ligands[-l_tbd_pos,]
+lrdb$receptors <- lrdb$receptors[-l_tbd_pos,]
+
+table(is.na(match(lrdb$ligands$ligand_ensembl_id,
+                  insp_ref_shared$ids$ensembl_mbl6_id)))
+
+```
+
+## Receptors
+
+```{r receptors_tb_discarded, message = FALSE}
+
+lrdb$receptors[(is.na(match(lrdb$receptors$receptor_ensembl_id,
+                            insp_ref_shared$ids$ensembl_mbl6_id))),]
+r_tbd <- unique(lrdb$receptors$receptor_symbol[
+  (is.na(match(lrdb$receptors$receptor_ensembl_id, 
+               insp_ref_shared$ids$ensembl_mbl6_id)))])
+length(r_tbd)
+r_tbd
+# 71 receptors to be discarded
+# looks like there is some overlap with l_tbd
+
+table(is.na(match(l_tbd, r_tbd)))
+# just a little
+
+```
+
+```{r discard_receptors_rows, message = FALSE}
+
+# get the rows of ligands to discard
+
+r_tbd_pos <- which(!is.na(match(lrdb$receptors$receptor_symbol, r_tbd)))
+length(r_tbd_pos)
+lrdb$interactions[r_tbd_pos,]
+
+# 300 rows to be removed
+lrdb$interactions <- lrdb$interactions[-r_tbd_pos,]
+lrdb$sources <- lrdb$sources[-r_tbd_pos,]
+lrdb$ligands <- lrdb$ligands[-r_tbd_pos,]
+lrdb$receptors <- lrdb$receptors[-r_tbd_pos,]
+
+table(is.na(match(lrdb$ligands$ligand_ensembl_id,
+                  insp_ref_shared$ids$ensembl_mbl6_id)))
+
+#  around 2400 interactions that are also found in insp_ref are left
+tail(lrdb$interactions)
+tail(lrdb$sources)
+tail(lrdb$ligands)
+tail(lrdb$receptors)
+
+```
+
+
+```{r checkpoint3_save, message = FALSE}
+
+list.save(lrdb, file = "../../data/databases/lrdb_005.rds")
+
+```
+
+```{r checkpoint3_load, message = FALSE}
+
+lrdb <- list.load(file = "../../data/databases/lrdb_005.rds")
+
+```
+
+# Add Annotations
+
+Around 380 interactions do not have functional annotations.
+
+```{r check_anno, message = FALSE}
+
+# number of missing annotations
+nrow(lrdb$interactions[lrdb$interactions$interaction_type == "",])
+lrdb$interactions[lrdb$interactions$interaction_type == "",]
+no_int_type <- lrdb$interactions$interaction_pair[
+  lrdb$interactions$interaction_type == ""]
+
+# number of conflicting annotations
+table(lrdb$interaction$interaction_type[
+  lrdb$interaction$interaction_type != ""])
+
+conflict_pos <- c(
+  grep("Cell-Cell Contact,Secreted", lrdb$interaction$interaction_type),
+  grep("ECM-Receptor,Secreted", lrdb$interaction$interaction_type),
+  grep("Secreted Signaling,Membrane", lrdb$interaction$interaction_type),
+  grep("Secreted Signaling,ECM", lrdb$interaction$interaction_type)
+ )
+length(conflict_pos)
+lrdb$interaction$interaction_pair[conflict_pos]
+# 36 conflicting annotations left
+
+```
+
+

@@ -1,0 +1,488 @@
+---
+author: "lea wölbert"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries, message = FALSE}
+library(biomaRt)
+library(rlist)
+```
+
+This part was taken from Perrine's script on how to download the relevant data 
+from BioMart.
+
+```{r load_biomart, message = FALSE}
+
+ensembl_mouse <- useMart(biomart="ENSEMBL_MART_ENSEMBL",
+                         host="www.ensembl.org",
+                         dataset="mmusculus_gene_ensembl")
+ensembl_list_mbl6 <- getBM(attributes=c("ensembl_gene_id",
+                                        "external_gene_name"), 
+                           mart=ensembl_mouse)
+
+ensembl_mcar <- useMart(biomart="ENSEMBL_MART_ENSEMBL",
+                        host="www.ensembl.org",
+                        dataset="mcaroli_gene_ensembl")
+ensembl_list_mcar <- getBM(attributes=c("ensembl_gene_id",
+                                        "mmusculus_homolog_ensembl_gene",
+                                      "mmusculus_homolog_associated_gene_name"), 
+                           mart=ensembl_mcar)
+
+ensembl_mcas <- useMart(biomart="ENSEMBL_MART_MOUSE",
+                        host="www.ensembl.org",
+                        dataset="mmcasteij_gene_ensembl")
+ensembl_list_mcas <- getBM(attributes=c("ensembl_gene_id",
+                                        "mmusculus_homolog_ensembl_gene",
+                                      "mmusculus_homolog_associated_gene_name"), 
+                           mart=ensembl_mcas)
+
+ensembl_mspr <- useMart(biomart="ENSEMBL_MART_ENSEMBL",
+                        host="www.ensembl.org",
+                        dataset="mspretus_gene_ensembl")
+ensembl_list_mspr <- getBM(attributes=c("ensembl_gene_id",
+                                        "mmusculus_homolog_ensembl_gene",
+                                      "mmusculus_homolog_associated_gene_name"), 
+                        mart=ensembl_mspr)
+
+```
+
+I have an approximate idea of what the data generally looks like from 
+01_load_check_data.
+Here I will attempt to merge the information by matching the ensembl_gene_ids.
+The ensembl_of mbl6 must match the mmusculus_homolog_ensembl_gene of
+other species.
+
+This script is used to generate a generate reference dataset containing
+all IDs, including one-to-many mappings and duplicated IDs or gene names.
+The aim is to add all information and make this dataset as complete as possible.
+
+Later on, this dataset will be subset into more useful datasets, for 
+instance containing less duplicates/one-to-one mappings or only genes/IDs 
+that are detected in the SCE objects that I will be dealing with.
+
+# Generate Scaffold
+
+First, make an empty scaffold based on the mbl6 ensembl ids.
+Every mbl6 ensembl ID appears exactly once, this vector is therefore the
+perfect backbone to start a huge DF list which can then be reduced 
+according to data requirements and gaps in other data.
+
+```{r make_insp_ref_scaffold, message = FALSE}
+
+# insp_ref = interspecies reference
+
+insp_ref <- list(
+  ids = data.frame(
+    ensembl_mbl6_id = ensembl_list_mbl6$ensembl_gene_id,
+    ensembl_mcar_id = vector("character", length = nrow(ensembl_list_mbl6)),
+    ensembl_mcas_id = vector("character", length = nrow(ensembl_list_mbl6)),
+    ensembl_mspr_id = vector("character", length = nrow(ensembl_list_mbl6))),
+  
+  gene_names = data.frame(
+    ensembl_mbl6_id = ensembl_list_mbl6$ensembl_gene_id,
+    mbl6_external_gene_name = vector(
+      "character", length = nrow(ensembl_list_mbl6)),
+    mcar_mmusculus_homolog_associated_gene_name = vector(
+      "character", length = nrow(ensembl_list_mbl6)),
+    mcas_mmusculus_homolog_associated_gene_name = vector(
+      "character", length = nrow(ensembl_list_mbl6)),
+    mspr_mmusculus_homolog_associated_gene_name = vector(
+      "character", length = nrow(ensembl_list_mbl6))),
+  
+  synonyms = data.frame(
+    ensembl_mbl6_id = ensembl_list_mbl6$ensembl_gene_id,
+    mbl6_external_gene_name = vector("character", 
+                                     length = nrow(ensembl_list_mbl6)),
+    synonym.1 = vector("character", length = nrow(ensembl_list_mbl6)),
+    synonym.2 = vector("character", length = nrow(ensembl_list_mbl6)),
+    synonym.3 = vector("character", length = nrow(ensembl_list_mbl6)),
+    synonym.4 = vector("character", length = nrow(ensembl_list_mbl6)),
+    synonym.5 = vector("character", length = nrow(ensembl_list_mbl6)),
+    synonym.6 = vector("character", length = nrow(ensembl_list_mbl6))),
+  
+  metadata = data.frame(
+    ensembl_mbl6_id = ensembl_list_mbl6$ensembl_gene_id,
+    duplicated = vector("character", length = nrow(ensembl_list_mbl6)),
+    source = rep("ensembl_mouse", length = nrow(ensembl_list_mbl6)),
+    notes = vector("character", length = nrow(ensembl_list_mbl6))
+    )
+)
+                                  
+```
+
+# Add Data 
+
+## Easy Matches
+
+### BL6/Mouse
+
+```{r add_bl6, message = FALSE}
+
+# For mbl6, I don't have to match because the order is already identical.
+insp_ref$gene_names$mbl6_external_gene_name <- ensembl_list_mbl6$external_gene_name
+
+```
+
+### Caroli
+
+```{r add_mcar_check, message = FALSE}
+
+head(ensembl_list_mcar)
+nrow(ensembl_list_mcar)
+
+# insp_ref positions that will be filled with corresponding data from list_mcar
+mcar_insp_fill_pos <- match(insp_ref$ids$ensembl_mbl6_id, 
+                            ensembl_list_mcar$mmusculus_homolog_ensembl_gene)
+# should be same length is insp rows
+nrow(insp_ref$ids)
+length(mcar_insp_fill_pos)
+
+# positions for ensembl_list_mcar that will replace empty slots in insp_ref
+mcar_replace_pos <- match(ensembl_list_mcar$mmusculus_homolog_ensembl_gene,
+                          insp_ref$ids$ensembl_mbl6_id)
+nrow(ensembl_list_mcar)
+length(mcar_replace_pos)
+
+# how many of those do not match
+table(is.na(mcar_insp_fill_pos))
+table(is.na(mcar_replace_pos))
+# different numbers of matches
+
+# Look at the matches
+# the number of matches is not the same from the different angles, there are
+# 500 more matches in mcar_replace_pos than in mcar_insp_fill_pos
+# these are likely duplicates
+
+table(is.na(match(
+  ensembl_list_mcar$mmusculus_homolog_ensembl_gene[!is.na(mcar_replace_pos)],
+  insp_ref$ids$ensembl_mbl6_id[!is.na(mcar_insp_fill_pos)])))
+
+table(is.na(match(
+  insp_ref$ids$ensembl_mbl6_id[!is.na(mcar_insp_fill_pos)],
+  ensembl_list_mcar$mmusculus_homolog_ensembl_gene[!is.na(mcar_replace_pos)])))
+# non-NA IDs always match, so it is duplicated IDs that make the difference
+# I will deal with duplicated IDs later, but keep them for reference
+
+# Look at the NAs
+
+# 28194 NAs
+# it is most likely that these are simply IDs that are not annotated for mcar
+# because the number of IDs in insp_genes is higher by the number of NAs 
+# substracting 1 from ensembl_list_mcar because "" count as unique but not as id
+nrow(insp_ref$ids) - length(unique(
+  ensembl_list_mcar$mmusculus_homolog_ensembl_gene)[-1])
+
+# they will stay empty or will later be referenced to other data
+insp_ref$ids[which(is.na(mcar_insp_fill_pos)),]
+insp_ref$gene_names[which(is.na(mcar_insp_fill_pos)),]
+
+# 9822 NAs 
+# this happens to be the same number as empty mmusculus_homolog_ensembl_gene
+mcar_nas <- ensembl_list_mcar[which(is.na(mcar_replace_pos)),]
+
+nrow(mcar_nas[mcar_nas$mmusculus_homolog_ensembl_gene != "",])
+nrow(mcar_nas[mcar_nas$mmusculus_homolog_ensembl_gene == "",])
+
+# indeed, the 9822 are empty
+# I will deal with empty homolog_ensembl ids later
+
+```
+
+```{r add_mcar, message = FALSE}
+
+# add the ensembl_mcar_id
+insp_ref$ids$ensembl_mcar_id <- ensembl_list_mcar$ensembl_gene_id[
+  mcar_insp_fill_pos]
+insp_ref$ids
+
+# in the same positions, add the homologous gene names
+insp_ref$gene_names$mcar_mmusculus_homolog_associated_gene_name <- ensembl_list_mcar$mmusculus_homolog_associated_gene_name[mcar_insp_fill_pos]
+
+# turn all "" in the mcar gene_names into NAs
+unique(insp_ref$gene_names$mcar_mmusculus_homolog_associated_gene_name)[1:20]
+insp_ref$gene_names$mcar_mmusculus_homolog_associated_gene_name[
+  insp_ref$gene_names$mcar_mmusculus_homolog_associated_gene_name == ""] <- NA
+insp_ref$gene_names
+
+# also turn all "" in the mbl6_external_gene_name into NAs
+insp_ref$gene_names$mbl6_external_gene_name[
+  insp_ref$gene_names$mbl6_external_gene_name == ""] <- NA
+insp_ref
+
+```
+
+### Castaneus
+
+```{r add_mcas_check, message = FALSE}
+
+head(ensembl_list_mcas)
+nrow(ensembl_list_mcas)
+
+# insp_ref positions that will be filled with corresponding data from list_mcas
+mcas_insp_fill_pos <- match(insp_ref$ids$ensembl_mbl6_id, 
+                            ensembl_list_mcas$mmusculus_homolog_ensembl_gene)
+# should be same length is insp rows
+nrow(insp_ref$ids)
+length(mcas_insp_fill_pos)
+
+# positions for ensembl_list_mcas that will replace empty slots in insp_ref
+mcas_replace_pos <- match(ensembl_list_mcas$mmusculus_homolog_ensembl_gene,
+                          insp_ref$ids$ensembl_mbl6_id)
+nrow(ensembl_list_mcas)
+length(mcas_replace_pos)
+
+# how many of those do not match
+table(is.na(mcas_insp_fill_pos))
+table(is.na(mcas_replace_pos))
+# the numbers are similar to mcar
+
+# Look at the matches
+table(is.na(match(
+  ensembl_list_mcas$mmusculus_homolog_ensembl_gene[!is.na(mcas_replace_pos)],
+  insp_ref$ids$ensembl_mbl6_id[!is.na(mcas_insp_fill_pos)])))
+
+table(is.na(match(
+  insp_ref$ids$ensembl_mbl6_id[!is.na(mcas_insp_fill_pos)],
+  ensembl_list_mcas$mmusculus_homolog_ensembl_gene[!is.na(mcas_replace_pos)])))
+# non-NA IDs always match, so it should be duplicated IDs that make the difference in numbers
+# I will deal with duplicates later, but keep them for reference
+
+# Look at the NAs
+
+# 30038 NAs in mcas_insp_fill_pos
+# some of these are simply IDs that are not annotated for mcas
+# there are more NAs than the difference between insp_ref and mcas
+# some of the IDs in mcas do not match to IDs in insp_ref
+insp_ref$ids[is.na(mcas_insp_fill_pos),]
+# I will deal with the non-matching mcas IDs later
+
+# 13706 NAs in mcas_IDs
+# most of these are empty
+mcas_nas <- ensembl_list_mcas[which(is.na(mcas_replace_pos)),]
+
+nrow(mcas_nas[mcas_nas$mmusculus_homolog_ensembl_gene != "",])
+nrow(mcas_nas[mcas_nas$mmusculus_homolog_ensembl_gene == "",])
+
+# 2359 of these NAs are not caused by empty gene names
+
+# I will deal with the empty IDs later
+# I will deal with the non-matching IDs later
+# if they cannot be mapped to bl6 they probably won't be needed 
+
+``` 
+
+I have a strong suspicion that the 2359 IDs from ensembl_list_mcas that do not 
+match the IDs insp_ref and some of the 30038 IDs IDs in insp_ref that do
+not match ensembl_list_mcas actually describe the same genes but for some 
+reason have different, non-matching IDs.
+
+mcas have always posed problems.
+
+I will proceed with the easy matching and get back to the mcas case later.
+
+```{r add_mcas, message = FALSE}
+
+# add the ensembl_mcas_id
+insp_ref$ids$ensembl_mcas_id <- ensembl_list_mcas$ensembl_gene_id[
+  mcas_insp_fill_pos]
+insp_ref$ids
+
+# in the same positions, add the homologous gene names
+insp_ref$gene_names$mcas_mmusculus_homolog_associated_gene_name <- ensembl_list_mcas$mmusculus_homolog_associated_gene_name[mcas_insp_fill_pos]
+
+# turn all "" in the mcar gene_names into NAs
+unique(insp_ref$gene_names$mcas_mmusculus_homolog_associated_gene_name)[1:20]
+insp_ref$gene_names$mcas_mmusculus_homolog_associated_gene_name[
+  insp_ref$gene_names$mcas_mmusculus_homolog_associated_gene_name == ""] <- NA
+insp_ref$gene_names
+
+```
+
+### Spretus
+
+```{r add_mspr_check, message = FALSE}
+
+head(ensembl_list_mspr)
+nrow(ensembl_list_mspr)
+
+# insp_ref positions that will be filled with corresponding data from list_mcar
+mspr_insp_fill_pos <- match(insp_ref$ids$ensembl_mbl6_id, 
+                            ensembl_list_mspr$mmusculus_homolog_ensembl_gene)
+# should be same length is insp rows
+nrow(insp_ref$ids)
+length(mspr_insp_fill_pos)
+
+# positions for ensembl_list_mspr that will replace empty slots in insp_ref
+mspr_replace_pos <- match(ensembl_list_mspr$mmusculus_homolog_ensembl_gene,
+                          insp_ref$ids$ensembl_mbl6_id)
+nrow(ensembl_list_mspr)
+length(mspr_replace_pos)
+
+# how many of those do not match
+table(is.na(mspr_insp_fill_pos))
+table(is.na(mspr_replace_pos))
+
+# Look at the matches
+table(is.na(match(
+  ensembl_list_mspr$mmusculus_homolog_ensembl_gene[!is.na(mspr_replace_pos)],
+  insp_ref$ids$ensembl_mbl6_id[!is.na(mspr_insp_fill_pos)])))
+
+table(is.na(match(
+  insp_ref$ids$ensembl_mbl6_id[!is.na(mspr_insp_fill_pos)],
+  ensembl_list_mspr$mmusculus_homolog_ensembl_gene[!is.na(mspr_replace_pos)])))
+# non-NA IDs always match, so it is duplicated IDs that make the difference 
+# I will deal with duplicated IDs later, but keep them for reference
+
+# Look at the NAs
+
+# 27419 NAs
+# it is most likely that these are simply IDs that are not annotated for mspr
+# because the number of IDs in insp_genes is higher by the number of NAs 
+# substracting 1 from ensembl_list_mspr because "" counts as unique but not as id
+nrow(insp_ref$ids) - length(unique(
+  ensembl_list_mspr$mmusculus_homolog_ensembl_gene)[-1])
+
+# they will stay empty or will later be referenced to other data
+insp_ref$ids[which(is.na(mspr_insp_fill_pos)),]
+insp_ref$gene_names[which(is.na(mspr_insp_fill_pos)),]
+
+
+# 10665 NAs 
+# this happens to be the same number as empty mmusculus_homolog_ensembl_gene
+mspr_nas <- ensembl_list_mspr[which(is.na(mspr_replace_pos)),]
+
+nrow(mspr_nas[mspr_nas$mmusculus_homolog_ensembl_gene != "",])
+nrow(mspr_nas[mspr_nas$mmusculus_homolog_ensembl_gene == "",])
+
+# indeed, the 10665 are empty
+# I will deal with empty homolog_ensembl ids later
+
+```
+
+```{r add_mspr, message = FALSE}
+
+# add the ensembl_mspr_id
+insp_ref$ids$ensembl_mspr_id <- ensembl_list_mspr$ensembl_gene_id[
+  mspr_insp_fill_pos]
+insp_ref$ids
+
+# in the same positions, add the homologous gene names
+insp_ref$gene_names$mspr_mmusculus_homolog_associated_gene_name <- ensembl_list_mspr$mmusculus_homolog_associated_gene_name[mspr_insp_fill_pos]
+
+# turn all "" in the mspr gene_names into NAs
+unique(insp_ref$gene_names$mspr_mmusculus_homolog_associated_gene_name)[1:20]
+insp_ref$gene_names$mspr_mmusculus_homolog_associated_gene_name[
+  insp_ref$gene_names$mspr_mmusculus_homolog_associated_gene_name == ""] <- NA
+insp_ref$gene_names
+
+```
+
+### Save Preliminary
+
+```{r save_prelim, message = FALSE}
+
+list.save(insp_ref, file = "../data/insp_ref_001.rds")
+
+```
+
+### Check data
+
+```{r load_prelim, message = FALSE}
+
+insp_ref <- list.load(file = "../data/insp_ref_001.rds")
+
+```
+
+```{r check_insp_ref, message = FALSE}
+
+# Check the IDs
+
+table(duplicated(insp_ref$ids$ensembl_mbl6_id))
+table(duplicated(insp_ref$ids$ensembl_mcar_id))
+table(duplicated(insp_ref$ids$ensembl_mcas_id))
+table(duplicated(insp_ref$ids$ensembl_mspr_id))
+# there are appoximately 25,000 unique IDs for each exotic species
+
+table(insp_ref$ids$ensembl_mbl6_id == "") 
+table(is.na(insp_ref$ids$ensembl_mbl6_id)) 
+table(is.na(insp_ref$ids$ensembl_mcar_id)) 
+table(is.na(insp_ref$ids$ensembl_mcas_id)) 
+table(is.na(insp_ref$ids$ensembl_mspr_id)) 
+# the numbers of IDs that duplicated and of those that are empty are similar
+
+table(duplicated(insp_ref$ids$ensembl_mbl6_id[
+  which(!is.na(insp_ref$ids$ensembl_mbl6_id))]))
+table(duplicated(insp_ref$ids$ensembl_mcar_id[
+  which(!is.na(insp_ref$ids$ensembl_mcar_id))]))
+table(duplicated(insp_ref$ids$ensembl_mcas_id[
+  which(!is.na(insp_ref$ids$ensembl_mcas_id))]))
+table(duplicated(insp_ref$ids$ensembl_mspr_id[
+  which(!is.na(insp_ref$ids$ensembl_mspr_id))]))
+# from this mapping, there are approx. 500 duplicated IDs in the exotic species
+
+
+# How many ensmus IDs have mapping to IDs from all three species?
+filled_id_mcar <- which(!is.na(insp_ref$ids$ensembl_mcar_id))
+filled_id_mcas <- which(!is.na(insp_ref$ids$ensembl_mcas_id))
+filled_id_mspr <- which(!is.na(insp_ref$ids$ensembl_mspr_id))
+
+filled_id_mcarmcas <- filled_id_mcar[which(!is.na(filled_id_mcar[
+  match(filled_id_mcar, filled_id_mcas)]))]
+filled_id_mcarmspr <- filled_id_mcar[which(!is.na(filled_id_mcar[
+  match(filled_id_mcar, filled_id_mspr)]))]
+
+filled_id_all <- filled_id_mcarmcas[which(!is.na(filled_id_mcarmcas[
+  match(filled_id_mcarmcas, filled_id_mcarmspr)]))]
+
+insp_ref$ids[filled_id_all,]
+nrow(insp_ref$ids[filled_id_all,])
+# approx. 20511 genes have shared IDs for all
+
+
+# Check  the Gene names
+
+table(duplicated(insp_ref$gene_names$mbl6_external_gene_name))
+table(duplicated(
+  insp_ref$gene_names$mcar_mmusculus_homolog_associated_gene_name))
+table(duplicated(
+  insp_ref$gene_names$mcas_mmusculus_homolog_associated_gene_name))
+table(duplicated(
+  insp_ref$gene_names$mspr_mmusculus_homolog_associated_gene_name))
+# there are appoximately 25,000 unique IDs for each exotic species EXCEPT CAST
+
+table(is.na(insp_ref$gene_names$mbl6_external_gene_name)) 
+table(is.na(insp_ref$gene_names$mcar_mmusculus_homolog_associated_gene_name)) 
+table(is.na(insp_ref$gene_names$mcas_mmusculus_homolog_associated_gene_name)) 
+table(is.na(insp_ref$gene_names$mspr_mmusculus_homolog_associated_gene_name)) 
+# there are 1492 gene names missing
+
+table(duplicated(insp_ref$gene_names$mbl6_external_gene_name[which(!is.na(
+  insp_ref$gene_names$mbl6_external_gene_name))]))
+table(duplicated(insp_ref$gene_names$mcar_mmusculus_homolog_associated_gene_name[
+  which(!is.na(
+    insp_ref$gene_names$mcar_mmusculus_homolog_associated_gene_name))]))
+table(duplicated(insp_ref$gene_names$mcas_mmusculus_homolog_associated_gene_name[
+  which(!is.na(
+    insp_ref$gene_names$mcas_mmusculus_homolog_associated_gene_name))]))
+table(duplicated(insp_ref$gene_names$mspr_mmusculus_homolog_associated_gene_name[
+  which(!is.na(
+    insp_ref$gene_names$mspr_mmusculus_homolog_associated_gene_name))]))
+# from this mapping, there are approx. 1500 duplicated gene names in the dataset
+
+
+# are there any gene names in the other species where the bl6 names are NAs?
+
+insp_ref_bl6nas <- insp_ref
+insp_ref_bl6nas$gene_names <- insp_ref_bl6nas$gene_names[
+  which(is.na(insp_ref$gene_names$mbl6_external_gene_name)),]
+
+unique(insp_ref_bl6nas$gene_names$mcar_mmusculus_homolog_associated_gene_name)
+unique(insp_ref_bl6nas$gene_names$mcas_mmusculus_homolog_associated_gene_name)
+unique(insp_ref_bl6nas$gene_names$mspr_mmusculus_homolog_associated_gene_name)
+# no, no other gene names could fill the mbl6 NAs
+
+```

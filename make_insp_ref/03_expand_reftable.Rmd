@@ -1,0 +1,1914 @@
+---
+author: "lea wölbert"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries, message = FALSE}
+library(SingleCellExperiment)
+library(biomaRt)
+library(rlist)
+library(rtracklayer)
+```
+
+In this script I will deal with everything I promised I would deal with later
+in 02_make_reftable.
+
+```{r load_biomart, message = FALSE}
+
+ensembl_mouse <- useMart(biomart="ENSEMBL_MART_ENSEMBL",
+                         host="www.ensembl.org",
+                         dataset="mmusculus_gene_ensembl")
+ensembl_list_mbl6 <- getBM(attributes=c(
+  "ensembl_gene_id",
+  "external_gene_name"), 
+  mart=ensembl_mouse)
+
+ensembl_mcar <- useMart(biomart="ENSEMBL_MART_ENSEMBL",
+                        host="www.ensembl.org",
+                        dataset="mcaroli_gene_ensembl")
+ensembl_list_mcar <- getBM(attributes=c(
+  "ensembl_gene_id",
+  "mmusculus_homolog_ensembl_gene",
+  "mmusculus_homolog_associated_gene_name"), 
+  mart=ensembl_mcar)
+
+ensembl_mcas <- useMart(biomart="ENSEMBL_MART_MOUSE",
+                        host="www.ensembl.org",
+                        dataset="mmcasteij_gene_ensembl")
+ensembl_list_mcas <- getBM(attributes=c(
+  "ensembl_gene_id",
+  "mmusculus_homolog_ensembl_gene",
+  "mmusculus_homolog_associated_gene_name"), 
+  mart=ensembl_mcas)
+
+ensembl_mspr <- useMart(biomart="ENSEMBL_MART_ENSEMBL",
+                        host="www.ensembl.org",
+                        dataset="mspretus_gene_ensembl")
+ensembl_list_mspr <- getBM(attributes=c(
+  "ensembl_gene_id",
+  "mmusculus_homolog_ensembl_gene",
+  "mmusculus_homolog_associated_gene_name"),
+  mart=ensembl_mspr)
+
+```
+
+```{r load_prelim, message = FALSE}
+
+insp_ref <- list.load(file = "../../data/databases/insp_ref_001.rds")
+
+```
+
+```{r load_sce_objects, message = FALSE}
+
+# objects merged (new) 
+# THESE ARE DEPRECATED OBJECTS!!!! but the alignment is still the same for now
+mbl6_old<- readRDS(file = "../../data/sce_objects/mbl6/mmus_old_00C")
+mcar_old <- readRDS(file = "../../data/sce_objects/mcar/mcar_old_00C")
+mcas_old <- readRDS(file = "../../data/sce_objects/mcas/mcas_old_00C")
+mspr_old <- readRDS(file = "../../data/sce_objects/mspr/mspr_old_00C")
+
+# objects merged (old)
+mbl6_renorm <- readRDS(
+  file = "../../data/sce_objects/mbl6/renorm_bl6_total_00C")
+mcar_renorm <- readRDS(
+  file = "../../data/sce_objects/mcar/renorm_caro_total_00C")
+mcas_renorm <- readRDS(
+  file = "../../data/sce_objects/mcas/renorm_cast_total_00C")
+mspr_renorm <- readRDS(
+  file = "../../data/sce_objects/mspr/renorm_spret_total_00C")
+
+# other unmerged objects for reference 
+mbl6_bm2_unm <- readRDS(file = "../../data/sce_objects/mbl6/bl61_bm2_006")
+mbl6_bm3_unm <- readRDS(file = "../../data/sce_objects/mbl6/bl61_bm3_006")
+mcas_bm2_unm <- readRDS(file = "../../data/sce_objects/mcas/cast1_bm2_006")
+mcas_bm3_unm <- readRDS(file = "../../data/sce_objects/mcas/cast1_bm3_006")
+mspr_bm2_unm <- readRDS(
+  file = "../../data/sce_objects/mspr/pilot1_sce_mspr1_bm2")
+
+```
+
+```{r load_gtf_objects, message = FALSE}
+
+# objects merged  both fractions
+mcar_gtf <- rtracklayer::import(
+  "../../data/databases/Mus_caroli.CAROLI_EIJ_v1.1.104.gtf")
+mcar_gtf <- as.data.frame(mcar_gtf)
+mcar_gtf <- mcar_gtf[,c(6, 10, 23)]
+mcar_gtf <- mcar_gtf[duplicated(mcar_gtf$gene_id) != TRUE,]
+
+mcas_gtf <- rtracklayer::import(
+  "../../data/databases/Mus_musculus_casteij.CAST_EiJ_v1.104.gtf")
+mcas_gtf <- as.data.frame(mcas_gtf)
+mcas_gtf <- mcas_gtf[,c(6, 10, 12)]
+mcas_gtf <- mcas_gtf[duplicated(mcas_gtf$gene_id) != TRUE,]
+
+
+mspr_gtf <- rtracklayer::import(
+  "../../data/databases/Mus_spretus.SPRET_EiJ_v1.104.gtf")
+mspr_gtf <- as.data.frame(mspr_gtf)
+mspr_gtf <- mspr_gtf[,c(6, 10, 23)]
+mspr_gtf <- mspr_gtf[duplicated(mspr_gtf$gene_id) != TRUE,]
+
+```
+
+Previous main problems of matching data:
+
+- there were many more insp_ref bl6 ensembl IDs than homolog ensembl IDs of 
+exotic species
+
+- there were exotic ensembl IDs that did not have a homolog ensembl ID to match 
+to bl6 ensembl (these were "empty" IDs)
+
+- For mcas, there were presumably homolog ensembl IDs in the mcas_ensembl_list 
+that do not match any bl6 ensembl ID in insp_ref
+
+- mcas have proven to be problematic in other aspects, too
+
+
+I will first expand the insp_ref to add even the "empty" IDs for the sake of 
+completeness.
+
+Next, I will try to find out more about the non-matching IDs in Cast and decide
+whether I should add those separately.
+I will also check if these IDs are also found in the SCE objects.
+
+Then, I will add info that is contained in the SCE objects.
+
+Finally, I will add flags about duplicates into the metadata$duplicates slot to
+warn about potential other IDs/sources/etc in the final database and give
+the opportunity to check for those also.
+
+
+# Expand rows using ensembl 
+
+Although these genes in the exotic mice don't have an homolog ensembl ID,
+they might still contain some useful information.
+
+## Caroli
+
+```{r make_empty_list_mcar, message = FALSE}
+
+# the leftover mcar IDs are the ones that are empty in the mmus ID col
+ensembl_list_mcar_empty <- ensembl_list_mcar
+ensembl_list_mcar_empty <- ensembl_list_mcar_empty[
+  ensembl_list_mcar_empty$mmusculus_homolog_ensembl_gene == "",]
+nrow(insp_ref$ids)
+nrow(ensembl_list_mcar_empty)
+
+unique(ensembl_list_mcar_empty$mmusculus_homolog_associated_gene_name)
+# no gene names contained, so only mcar ensmus IDs would be added
+
+# first check if the leftover mcar ensmus IDs are already part of the insp_ref
+table(is.na(match(ensembl_list_mcar_empty$ensembl_gene_id, 
+                   insp_ref$ids$ensembl_mcar_id)))
+# no
+
+```
+
+```{r add_empty_list_mcar}
+
+# then just rbind an object of same structure as insp_ref 
+# but containing only these rows to the actual insp_ref
+
+l_mcar <- nrow(ensembl_list_mcar_empty)
+
+insp_ref_add_mcar <- list(
+  ids = data.frame(
+    ensembl_mbl6_id = vector("character", length = l_mcar),
+    ensembl_mcar_id = ensembl_list_mcar_empty$ensembl_gene_id,
+    ensembl_mcas_id = vector("character", length =l_mcar),
+    ensembl_mspr_id = vector("character", length = l_mcar)
+   ),
+  gene_names = data.frame(
+    ensembl_mbl6_id = vector("character", length = l_mcar),
+    mbl6_external_gene_name = vector("character", length = l_mcar),
+    mcar_mmusculus_homolog_associated_gene_name = vector("character", 
+                                                         length = l_mcar),
+    mcas_mmusculus_homolog_associated_gene_name = vector("character", length = 
+                                                           l_mcar),
+    mspr_mmusculus_homolog_associated_gene_name = vector("character", 
+                                                         length = l_mcar)
+    ),
+   synonyms = data.frame(
+     ensembl_mbl6_id = vector("character", length = l_mcar),
+     mbl6_external_gene_name = vector("character", length = l_mcar),
+     synonym.1 = vector("character", length = l_mcar),
+     synonym.2 = vector("character", length = l_mcar),
+     synonym.3 = vector("character", length = l_mcar),
+     synonym.4 = vector("character", length = l_mcar),
+     synonym.5 = vector("character", length = l_mcar),
+     synonym.6 = vector("character", length = l_mcar)
+    ),
+    metadata = data.frame(
+      ensembl_mbl6_id = vector("character", length = l_mcar),
+      duplicated = vector("character", length =l_mcar),
+      source = rep("ensembl_mcar", length = l_mcar),
+      notes = vector("character", length = l_mcar)
+    )
+)
+
+nrow(insp_ref_add_mcar$ids)
+
+```
+
+```{r rbind_empty_list_mcar, message = FALSE}
+
+nrow(insp_ref$ids)
+insp_ref$ids <- rbind(insp_ref$ids, insp_ref_add_mcar$ids)
+insp_ref$gene_names  <- rbind(insp_ref$gene_names, insp_ref_add_mcar$gene_names)
+insp_ref$synonyms <- rbind(insp_ref$synonyms, insp_ref_add_mcar$synonyms)
+insp_ref$metadata <- rbind(insp_ref$metadata, insp_ref_add_mcar$metadata)
+
+nrow(insp_ref$ids)
+tail(insp_ref$metadata)
+tail(insp_ref$ids)
+
+```
+
+## Castaneus
+
+So mcas has some further problems outside of empty homolog bl6 ids.
+However, there still are quite a few empty ones, so I will also add those
+
+```{r make_empty_list_mcas, message = FALSE}
+
+ensembl_list_mcas_empty <- ensembl_list_mcas
+ensembl_list_mcas_empty <- ensembl_list_mcas_empty[
+  ensembl_list_mcas_empty$mmusculus_homolog_ensembl_gene == "",]
+nrow(insp_ref$ids)
+nrow(ensembl_list_mcas_empty)
+
+unique(ensembl_list_mcas_empty$mmusculus_homolog_associated_gene_name)
+# no gene names contained, so only mcas ensmus IDs would be added
+
+# first check if the leftover mcas ensmus IDs are already part of the insp_ref
+table(!is.na(match(ensembl_list_mcas_empty$ensembl_gene_id, 
+                   insp_ref$ids$ensembl_mcas_id)))
+# no
+
+```
+
+```{r add_empty_list_mcas, message = FALSE}
+
+# then just rbind a object of same structure as insp_ref 
+
+l_mcas <- nrow(ensembl_list_mcas_empty)
+
+insp_ref_add_mcas <- list(
+  ids = data.frame(
+    ensembl_mbl6_id = vector("character", length = l_mcas),
+    ensembl_mcar_id = vector("character", length = l_mcas),
+    ensembl_mcas_id = ensembl_list_mcas_empty$ensembl_gene_id,
+    ensembl_mspr_id = vector("character", length = l_mcas)
+   ),
+  gene_names = data.frame(
+    ensembl_mbl6_id = vector("character", length = l_mcas),
+    mbl6_external_gene_name = vector("character", length = l_mcas),
+    mcar_mmusculus_homolog_associated_gene_name = vector("character", 
+                                                         length = l_mcas),
+    mcas_mmusculus_homolog_associated_gene_name = vector("character", 
+                                                         length = l_mcas),
+    mspr_mmusculus_homolog_associated_gene_name = vector("character", 
+                                                         length = l_mcas)
+    ),
+  synonyms = data.frame(
+    ensembl_mbl6_id = vector("character", length = l_mcas),
+    mbl6_external_gene_name = vector("character", length = l_mcas),
+    synonym.1 = vector("character", length = l_mcas),
+    synonym.2 = vector("character", length = l_mcas),
+    synonym.3 = vector("character", length = l_mcas),
+    synonym.4 = vector("character", length = l_mcas),
+    synonym.5 = vector("character", length = l_mcas),
+    synonym.6 = vector("character", length = l_mcas)
+    ),
+  metadata = data.frame(ensembl_mbl6_id = vector("character", length = l_mcas),
+    duplicated = vector("character", length = l_mcas),
+    source = rep("ensembl_mcas", length = l_mcas),
+    notes = vector("character", length = l_mcas)
+   )
+ )
+
+nrow(insp_ref_add_mcas$ids)
+
+```
+
+```{r rbind_empty_list_mcas, message = FALSE}
+
+nrow(insp_ref$ids)
+insp_ref$ids <- rbind(insp_ref$ids, insp_ref_add_mcas$ids)
+insp_ref$gene_names  <- rbind(insp_ref$gene_names, insp_ref_add_mcas$gene_names)
+insp_ref$synonyms <- rbind(insp_ref$synonyms, insp_ref_add_mcas$synonyms)
+insp_ref$metadata <- rbind(insp_ref$metadata, insp_ref_add_mcas$metadata)
+
+nrow(insp_ref$ids)
+tail(insp_ref$metadata)
+tail(insp_ref$ids)
+
+```
+
+## Spretus
+
+```{r make_empty_list_mspr, message = FALSE}
+
+ensembl_list_mspr_empty <- ensembl_list_mspr
+ensembl_list_mspr_empty <- ensembl_list_mspr_empty[
+  ensembl_list_mspr_empty$mmusculus_homolog_ensembl_gene == "",]
+nrow(insp_ref$ids)
+nrow(ensembl_list_mspr_empty)
+
+unique(ensembl_list_mspr_empty$mmusculus_homolog_associated_gene_name)
+# no gene names contained, so only mspr ensmus IDs would be added
+
+# first check if the leftover mspr ensmus IDs are already part of the insp_ref
+table(!is.na(match(ensembl_list_mspr_empty$ensembl_gene_id, 
+                   insp_ref$ids$ensembl_mspr_id)))
+# no
+
+```
+
+```{r add_empty_list_mspr, message = FALSE}
+
+l_mspr <- nrow(ensembl_list_mspr_empty)
+
+insp_ref_add_mspr <- list(
+  ids = data.frame(
+    ensembl_mbl6_id = vector("character", length = l_mspr),
+    ensembl_mcar_id = vector("character", length = l_mspr),
+    ensembl_mcas_id = vector("character", length = l_mspr),
+    ensembl_mspr_id = ensembl_list_mspr_empty$ensembl_gene_id
+   ),
+  gene_names = data.frame(
+    ensembl_mbl6_id = vector("character", length = l_mspr),
+    mbl6_external_gene_name = vector("character", length = l_mspr),
+    mcar_mmusculus_homolog_associated_gene_name = vector("character",
+                                                         length = l_mspr),
+    mcas_mmusculus_homolog_associated_gene_name = vector("character", 
+                                                         length = l_mspr),
+    mspr_mmusculus_homolog_associated_gene_name = vector("character",
+                                                         length = l_mspr)
+    ),
+  synonyms = data.frame(
+    ensembl_mbl6_id = vector("character", length = l_mspr),
+    mbl6_external_gene_name = vector("character", length = l_mspr),
+    synonym.1 = vector("character", length = l_mspr),
+    synonym.2 = vector("character", length = l_mspr),
+    synonym.3 = vector("character", length = l_mspr),
+    synonym.4 = vector("character", length = l_mspr),
+    synonym.5 = vector("character", length = l_mspr),
+    synonym.6 = vector("character", length = l_mspr)
+   ),
+  metadata = data.frame(
+    ensembl_mbl6_id = vector("character", length = l_mspr),
+    duplicated = vector("character", length = l_mspr),
+    source = rep("ensembl_mspr", length = l_mspr),
+    notes = vector("character", length = l_mspr)
+   )
+)
+
+nrow(insp_ref_add_mspr$ids)
+
+```
+
+```{r rbind_empty_list_mspr, message = FALSE}
+
+nrow(insp_ref$ids)
+insp_ref$ids <- rbind(insp_ref$ids, insp_ref_add_mspr$ids)
+insp_ref$gene_names  <- rbind(insp_ref$gene_names, insp_ref_add_mspr$gene_names)
+insp_ref$synonyms <- rbind(insp_ref$synonyms, insp_ref_add_mspr$synonyms)
+insp_ref$metadata <- rbind(insp_ref$metadata, insp_ref_add_mspr$metadata)
+
+nrow(insp_ref$ids)
+tail(insp_ref$metadata)
+tail(insp_ref$ids)
+
+```
+
+## Checkpoint 
+
+```{r save_cp_1, message = FALSE}
+
+list.save(insp_ref, file = "../../data/databases/insp_ref_002.rds")
+
+```
+
+
+```{r load_cp_1, message = FALSE}
+
+insp_ref <- list.load(file = "../../data/databases/insp_ref_002.rds")
+
+```
+
+# Deal with Cast non-identical IDs
+
+There were some non-identical IDs between ensembl_list_mcas and insp_ref
+that could not be explained by empty IDs or higher number of total IDs in 
+insp_ref.
+
+## Should I add?
+
+First, I isolate the non-matchable IDs from ensembl_list_mcas
+
+```{r make_matches, message = FALSE}
+
+mcas_insp_fill_pos <- match(insp_ref$ids$ensembl_mbl6_id, 
+                            ensembl_list_mcas$mmusculus_homolog_ensembl_gene)
+# should be same length as insp rows
+nrow(insp_ref$ids)
+length(mcas_insp_fill_pos)
+
+# positions for ensembl_list_mcas that will replace empty slots in insp_ref
+mcas_replace_pos <- match(ensembl_list_mcas$mmusculus_homolog_ensembl_gene,
+                          insp_ref$ids$ensembl_mbl6_id)
+nrow(ensembl_list_mcas)
+length(mcas_replace_pos)
+
+# how many of those do not match
+table(is.na(mcas_insp_fill_pos))
+table(is.na(mcas_replace_pos))
+# around 2400 IDs in are in ensembl_list_mcas but not in insp_ref
+# even after the ones without mmus ensmus IDs were added by rbind
+
+```
+
+First I look at the IDs in ensembl_list_mcas that cannot be matched to insp_ref
+
+```{r find_mcas_nas_subset, message = FALSE}
+
+# subset ensembl_list_mcas to only contain these NA IDs
+
+ensembl_list_mcas_nas <- ensembl_list_mcas
+ensembl_list_mcas_nas <-  ensembl_list_mcas_nas[which(is.na(mcas_replace_pos)),]
+nrow(ensembl_list_mcas_nas)
+head(ensembl_list_mcas_nas)
+# they contain homolog ensembl gene ids that could NOT be matched to insp_ref
+
+```
+
+```{r mcas_nas_gene_names, message = FALSE}
+
+# Look at the gene names
+length(unique(ensembl_list_mcas_nas$mmusculus_homolog_associated_gene_name))
+
+# extract the unique gene names from the non-matching IDs that are not ""
+gene_names_mcas_na_ids <- ensembl_list_mcas_nas$mmusculus_homolog_associated_gene_name
+gene_names_mcas_na_ids <- unique(gene_names_mcas_na_ids)
+gene_names_mcas_na_ids <- gene_names_mcas_na_ids[gene_names_mcas_na_ids != ""]
+head(gene_names_mcas_na_ids)
+# 426 gene names belong to the IDs that are not found in insp_ref
+
+# some of mcas gene names were highly duplicated, so some may already be in 
+# insp_ref after adding them with the "easy" or "empty" matches from before
+
+
+# Look at gene names that are not exclusive to ensembl_list_mcas
+
+# number of gene names in ensembl_list_mcas_nas already contained in insp_ref
+table(!is.na(match(
+  gene_names_mcas_na_ids, insp_ref$gene_names$mbl6_external_gene_name)))
+table(!is.na(match(
+  gene_names_mcas_na_ids, 
+  insp_ref$gene_names$mcas_mmusculus_homolog_associated_gene_name)))
+# 40 of those gene names are already in mbl6_external_gene_name
+# and 69 are also in mcas_mmusculus_homolog_associated_gene_name
+# they are probably alternative gene names/synonyms
+
+```
+
+```{r mcas_nas_gn_check, message = FALSE}
+
+# look at potential alternative names
+
+# subset insp_ref to show rows with these gene names 
+head(insp_ref$gene_names[!is.na(match(
+  insp_ref$gene_names$mcas_mmusculus_homolog_associated_gene_name, 
+  gene_names_mcas_na_ids)),])
+shared_gene_names1 <- insp_ref$gene_names$mcas_mmusculus_homolog_associated_gene_name[
+  !is.na(match(insp_ref$gene_names$mcas_mmusculus_homolog_associated_gene_name, 
+               gene_names_mcas_na_ids))]
+shared_gene_names1 <- unique(shared_gene_names1)
+head(shared_gene_names1)
+# many of these rows have Gms (predicted genes) listed as ext gene name
+# but in the mcas reference, they have actual names
+
+# subset insp_ref to show rows with these gene names in mbl6_external_gene_name
+shared_gene_names2 <- insp_ref$gene_names$mbl6_external_gene_name[!is.na(match(
+  insp_ref$gene_names$mbl6_external_gene_name, gene_names_mcas_na_ids))]
+shared_gene_names2 <- unique(shared_gene_names2)
+head(shared_gene_names2)
+# most of those are some rRNAs, snoRNAs, small nuclear RNAs
+
+# match to get the gene names that are in both 
+# mcas_mmusculus_homolog_associated_gene_name and mbl6_external_gene_name
+# interestingly, there are no genes that are in both
+shared_gene_names <- shared_gene_names1[which(!is.na(
+  match(shared_gene_names1, shared_gene_names2)))]
+
+```
+
+```{r mcas_nas_gn_check_sce, message = FALSE}
+
+# check if these gene names are found in the sce objects
+length(which(!is.na(match(gene_names_mcas_na_ids, 
+                          rownames(mcas_old)))))
+# of course found in cast
+
+length(which(!is.na(match(gene_names_mcas_na_ids, 
+                          rownames(mbl6_old)))))
+# also found in bl6
+
+length(which(!is.na(match(gene_names_mcas_na_ids, 
+                          rownames(mcar_old)))))
+# not found in caroli
+
+length(which(!is.na(match(gene_names_mcas_na_ids, 
+                          rownames(mspr_old)))))
+# one found in spret
+
+```
+
+```{r mcas_nas_gene_names_exclusive, message = FALSE}
+
+# Look at the gene names that are still exclusive to ensembl_list_mcas_nas
+# = gene names that are not yet found in insp_ref
+
+excls_gene_names1 <- gene_names_mcas_na_ids[is.na(match(
+  gene_names_mcas_na_ids, insp_ref$gene_names$mbl6_external_gene_name))]
+excls_gene_names_uni1 <- unique(excls_gene_names1)
+length(excls_gene_names_uni1)
+
+excls_gene_names2 <- gene_names_mcas_na_ids[is.na(
+  match(gene_names_mcas_na_ids, 
+        insp_ref$gene_names$mcas_mmusculus_homolog_associated_gene_name))]
+excls_gene_names_uni2 <- unique(excls_gene_names2)
+length(excls_gene_names_uni2)
+
+excls_gene_names <- excls_gene_names_uni1[which(!is.na(match(
+  excls_gene_names_uni1, excls_gene_names_uni2)))]
+length(excls_gene_names)
+# these genes are found neither in insp_ref mbl6_external_gene_name 
+# nor mcas_mmusculus_homolog_associated_gene_name
+
+# check if these genes are found in any of the SCE objects
+length(which(!is.na(match(excls_gene_names, rownames(mcas_old)))))
+# of course found in cast
+
+length(which(!is.na(match(excls_gene_names, rownames(mbl6_old)))))
+# also found in bl6
+
+length(which(!is.na(match(excls_gene_names, rownames(mcar_old)))))
+length(which(!is.na(match(excls_gene_names, rownames(mspr_old)))))
+# not found in the other exotic mice
+
+```
+
+Because these gene names are found in other objects, all additional IDs
+from ensembl_list_mcas will be added to insp_ref.
+
+## Add them
+
+```{r mcas_nas_ids, message = FALSE}
+
+# Look at the gene names
+length(unique(ensembl_list_mcas_nas$ensembl_gene_id))
+
+# extract the unique gene names from the non-matching IDs that are not ""
+ids_mcas_na <- ensembl_list_mcas_nas$ensembl_gene_id
+ids_mcas_na <- unique(ids_mcas_na)
+ids_mcas_na <- ids_mcas_na[ids_mcas_na != ""]
+length(ids_mcas_na)
+# 2340 gene names belong to the IDs that are not found in insp_ref
+
+# some of mcas gene names were highly duplicated, so some may already be in 
+# insp_ref after adding them with the "easy" or "empty" matches from before
+
+```
+
+```{r mcas_nas_ids_check, message = FALSE}
+
+# which nas IDs are found in both datasets?
+# those were likely duplicated in ensembl_list_mcas
+shared_ids_mcas_na <- ids_mcas_na[which(!is.na(match(
+  ids_mcas_na, insp_ref$ids$ensembl_mcas_id )))]
+length(shared_ids_mcas_na)
+# only four of those were previously duplicated
+
+insp_ref$ids[which(!is.na(match(insp_ref$ids$ensembl_mcas_id, 
+                                shared_ids_mcas_na))),]
+insp_ref$gene_names[which(!is.na(match(insp_ref$ids$ensembl_mcas_id, 
+                                       shared_ids_mcas_na))),]
+ensembl_list_mcas_nas[which(!is.na(match(ensembl_list_mcas_nas$ensembl_gene_id,
+                                         shared_ids_mcas_na))),]
+
+# they seem to correspond to the same genes in both datasets
+excl_ids_mcas_na <- ids_mcas_na[which(is.na(match(
+  ids_mcas_na,insp_ref$ids$ensembl_mcas_id)))]
+excl_ids_mcas_na <- unique(excl_ids_mcas_na)
+excl_ids_mcas_na <- excl_ids_mcas_na[excl_ids_mcas_na != ""]
+
+# these are the cast IDs not found in insp_ref at all
+length(excl_ids_mcas_na)
+
+```
+
+```{r mcas_nas_ids_check_sce, message = FALSE}
+
+# do the rows contain more information?
+head(ensembl_list_mcas_nas[which(!is.na(match(
+  ensembl_list_mcas_nas$ensembl_gene_id,  excl_ids_mcas_na))),])
+# they mostly contain the gene names which we already found
+
+#check if these IDs are found in the SCE objects
+
+length(which(!is.na(match(excl_ids_mcas_na, rownames(mcas_old)))))
+# around a 100 of these found in cast
+
+length(which(!is.na(match(excl_ids_mcas_na, rownames(mbl6_old)))))
+length(which(!is.na(match(excl_ids_mcas_na, rownames(mcar_old)))))
+length(which(!is.na(match(excl_ids_mcas_na, rownames(mspr_old)))))
+# of course not found in the other mice
+
+```
+
+```{r add_cast_na_ids, message = FALSE}
+
+l_mcas_nas <- nrow(ensembl_list_mcas_nas)
+
+insp_ref_add_mcas_nas <- list(
+  ids = data.frame(
+    ensembl_mbl6_id = ensembl_list_mcas_nas$mmusculus_homolog_ensembl_gene,
+    ensembl_mcar_id = vector("character", length = l_mcas_nas),
+    ensembl_mcas_id = ensembl_list_mcas_nas$ensembl_gene_id,
+    ensembl_mspr_id = vector("character", length = l_mcas_nas)
+   ),
+  gene_names = data.frame(
+    ensembl_mbl6_id = ensembl_list_mcas_nas$mmusculus_homolog_ensembl_gene,
+    mbl6_external_gene_name = vector("character", length = l_mcas_nas),
+    mcar_mmusculus_homolog_associated_gene_name = vector("character", 
+                                                         length = l_mcas_nas),
+    mcas_mmusculus_homolog_associated_gene_name = ensembl_list_mcas_nas$mmusculus_homolog_associated_gene_name,
+    mspr_mmusculus_homolog_associated_gene_name = vector("character", 
+                                                         length = l_mcas_nas)
+   ),
+  synonyms = data.frame(
+    ensembl_mbl6_id = ensembl_list_mcas_nas$mmusculus_homolog_ensembl_gene,
+    mbl6_external_gene_name = vector("character", length = l_mcas_nas),
+    synonym.1 = vector("character", length = l_mcas_nas),
+    synonym.2 = vector("character", length = l_mcas_nas),
+    synonym.3 = vector("character", length = l_mcas_nas),
+    synonym.4 = vector("character", length = l_mcas_nas),
+    synonym.5 = vector("character", length = l_mcas_nas),
+    synonym.6 = vector("character", length = l_mcas_nas)
+  ),
+  metadata = data.frame(
+    ensembl_mbl6_id = ensembl_list_mcas_nas$mmusculus_homolog_ensembl_gene,
+    duplicated = vector("character", length = l_mcas_nas),
+    source = rep("ensembl_mcas", length = l_mcas_nas),
+    notes = rep("Possibly_deprecated")
+   )
+ )
+
+nrow(insp_ref_add_mcas_nas$ids)
+
+# INTERESTINGLY some ensmus IDs are duplicated WHEN DERIVED FROM CAST 
+table(duplicated(insp_ref_add_mcas_nas$ids$ensembl_mbl6_id))
+
+```
+
+```{r rbind_cast_na_ids, message = FALSE}
+
+nrow(insp_ref$ids)
+insp_ref$ids <- rbind(insp_ref$ids, insp_ref_add_mcas_nas$ids)
+insp_ref$gene_names  <- rbind(insp_ref$gene_names, 
+                              insp_ref_add_mcas_nas$gene_names)
+insp_ref$synonyms <- rbind(insp_ref$synonyms, insp_ref_add_mcas_nas$synonyms)
+insp_ref$metadata <- rbind(insp_ref$metadata, insp_ref_add_mcas_nas$metadata)
+
+nrow(insp_ref$ids)
+tail(insp_ref$metadata)
+tail(insp_ref$ids)
+
+```
+
+## Checkpoint
+
+```{r save_cp_2, message = FALSE}
+
+list.save(insp_ref, file = "../../data/databases/insp_ref_003.rds")
+
+```
+
+```{r load_cp_2, message = FALSE}
+
+insp_ref <- list.load(file = "../../data/databases/insp_ref_003.rds")
+
+```
+
+# Add Info From SCE Objects
+
+Is the info from all SCE objects identical?
+
+```{r compare_between_sce_objects, message = FALSE}
+
+# BL6
+# compare between fractions of same species
+table(is.na(match(rowData(mbl6_bm2_unm)$ID, rowData(mbl6_bm3_unm)$ID)))
+table(is.na(match(rowData(mbl6_bm2_unm)$Symbol, rowData(mbl6_bm3_unm)$Symbol)))
+
+# CAST 
+table(is.na(match(rowData(mcas_bm2_unm)$ID, rowData(mcas_bm3_unm)$ID)))
+table(is.na(match(rowData(mcas_bm2_unm)$Symbol, rowData(mcas_bm3_unm)$Symbol)))
+# no difference between the fractions apparently
+
+```
+
+```{r compare_between_bl6, message = FALSE}
+
+# BL6
+# compare between merged and unmerged
+table(is.na(match(rowData(mbl6_bm2_unm)$ID, rowData(mbl6_old)$ID)))
+table(is.na(match(rowData(mbl6_old)$ID, rowData(mbl6_bm2_unm)$ID)))
+
+table(is.na(match(rowData(mbl6_renorm)$ID, rowData(mbl6_old)$ID)))
+table(is.na(match(rowData(mbl6_old)$ID, rowData(mbl6_renorm)$ID)))
+
+table(is.na(match(rowData(mbl6_renorm)$ID, rowData(mbl6_bm2_unm)$ID)))
+table(is.na(match(rowData(mbl6_bm2_unm)$ID, rowData(mbl6_renorm)$ID)))
+# there are more rows in mbl6_old 
+# these contain additional IDs compared to other objects
+# mbl6_renorm and mbl6_bm2_unm have the same IDs
+
+```
+
+```{r compare_between_caro, message = FALSE}
+
+# CARO
+table(is.na(match(rowData(mcar_renorm)$ID, rowData(mcar_old)$ID)))
+table(is.na(match(rowData(mcar_old)$ID, rowData(mcar_renorm)$ID)))
+# no differences for caro
+
+```
+
+```{r compare_between_cast, message = FALSE}
+
+# CAST
+table(is.na(match(rowData(mcas_bm2_unm)$ID, rowData(mcas_old)$ID)))
+table(is.na(match(rowData(mcas_old)$ID, rowData(mcas_bm2_unm)$ID)))
+
+table(is.na(match(rowData(mcas_renorm)$ID, rowData(mcas_old)$ID)))
+table(is.na(match(rowData(mcas_old)$ID, rowData(mcas_renorm)$ID)))
+
+table(is.na(match(rowData(mcas_renorm)$ID, rowData(mcas_bm2_unm)$ID)))
+table(is.na(match(rowData(mcas_bm2_unm)$ID, rowData(mcas_renorm)$ID)))
+# there are additional unique IDs in mcas_bm2_unm and mcas_old
+# mcas_renorm and mcas_old have the same IDs
+
+```
+
+```{r compare_between_spret, message = FALSE}
+
+# SPRET
+# IDs
+table(is.na(match(rowData(mspr_bm2_unm)$ID, rowData(mspr_old)$ID)))
+table(is.na(match(rowData(mspr_old)$ID, rowData(mspr_bm2_unm)$ID)))
+
+table(is.na(match(rowData(mspr_renorm)$ID, rowData(mspr_old)$ID)))
+table(is.na(match(rowData(mspr_old)$ID, rowData(mspr_renorm)$ID)))
+
+table(is.na(match(rowData(mspr_renorm)$ID, rowData(mspr_bm2_unm)$ID)))
+table(is.na(match(rowData(mspr_bm2_unm)$ID, rowData(mspr_renorm)$ID)))
+
+# Between Symbol
+table(is.na(match(rowData(mspr_bm2_unm)$Symbol, rowData(mspr_old)$Symbol)))
+table(is.na(match(rowData(mspr_old)$Symbol, rowData(mspr_bm2_unm)$Symbol)))
+
+table(is.na(match(rowData(mspr_renorm)$Symbol, rowData(mspr_old)$Symbol)))
+table(is.na(match(rowData(mspr_old)$Symbol, rowData(mspr_renorm)$Symbol)))
+
+table(is.na(match(rowData(mspr_renorm)$Symbol, rowData(mspr_bm2_unm)$Symbol)))
+table(is.na(match(rowData(mspr_bm2_unm)$Symbol, rowData(mspr_renorm)$Symbol)))
+
+# Between Symbols2 
+table(is.na(match(rowData(mspr_bm2_unm)$Symbols2, rowData(mspr_old)$Symbols2)))
+table(is.na(match(rowData(mspr_old)$Symbols2, rowData(mspr_bm2_unm)$Symbols2)))
+
+table(is.na(match(rowData(mspr_renorm)$Symbols2, rowData(mspr_old)$Symbols2)))
+table(is.na(match(rowData(mspr_old)$Symbols2, rowData(mspr_renorm)$Symbols2)))
+
+table(is.na(match(rowData(mspr_renorm)$Symbols2, 
+                  rowData(mspr_bm2_unm)$Symbols2)))
+table(is.na(match(rowData(mspr_bm2_unm)$Symbols2, 
+                  rowData(mspr_renorm)$Symbols2)))
+# again no difference, how about between Symbol and Symbols2
+
+# Compare Symbol to Symbols2
+table(is.na(match(rowData(mspr_bm2_unm)$Symbol, 
+                  rowData(mspr_bm2_unm)$Symbols2)))
+table(is.na(match(rowData(mspr_bm2_unm)$Symbol, 
+                  rowData(mspr_bm2_unm)$Symbols2)))
+
+table(is.na(match(rowData(mspr_old)$Symbol, rowData(mspr_old)$Symbols2)))
+table(is.na(match(rowData(mspr_old)$Symbol, rowData(mspr_old)$Symbols2)))
+
+table(is.na(match(rowData(mspr_renorm)$Symbol, rowData(mspr_renorm)$Symbols2)))
+table(is.na(match(rowData(mspr_renorm)$Symbol, rowData(mspr_renorm)$Symbols2)))
+# A LOT OF DIFFERENCES
+# The most important differences are between Symbol and Symbols2 
+# of the same object
+
+```
+
+## BL6
+
+```{r compare_bl6_sce, message = FALSE}
+
+# three bl6 objects: mbl6_bm2_unm, mbl6_old, mbl6_renorm
+
+#ids: is there more info in the SCE object
+table(is.na(match(rowData(mbl6_bm2_unm)$ID, insp_ref$ids$ensembl_mbl6_id)))
+table(is.na(match(rowData(mbl6_old)$ID, insp_ref$ids$ensembl_mbl6_id)))
+table(is.na(match(rowData(mbl6_renorm)$ID, insp_ref$ids$ensembl_mbl6_id)))
+# the overlap is ok (1000 missing IDs out of 50,000) for IDs
+
+# gene names
+table(is.na(match(rowData(mbl6_bm2_unm)$Symbol, 
+                  insp_ref$gene_names$mbl6_external_gene_name)))
+table(is.na(match(rowData(mbl6_old)$Symbol, 
+                  insp_ref$gene_names$mbl6_external_gene_name)))
+table(is.na(match(rowData(mbl6_renorm)$Symbol, 
+                  insp_ref$gene_names$mbl6_external_gene_name)))
+# there are fewer matching gene names
+# around 5000 gene names are missing  in insp_ref
+
+# mbl6_old has the highest number of missing IDs and names
+
+```
+
+### IDs
+
+```{r compare_bl6_sce_ids, message = FALSE}
+
+# look the the non-matching IDs
+# there are around 1100 IDs in the SCE object which are not in the insp_ref
+# we have established that mbl6_bm2_unm and mbl6_renorm match 
+nm_ids_mbl6.1 <- rowData(mbl6_bm2_unm)$ID[which(is.na(match(
+  rowData(mbl6_bm2_unm)$ID, insp_ref$ids$ensembl_mbl6_id)))]
+length(nm_ids_mbl6.1)
+
+nm_ids_mbl6.2 <- rowData(mbl6_old)$ID[which(is.na(match(
+  rowData(mbl6_old)$ID, insp_ref$ids$ensembl_mbl6_id)))]
+length(nm_ids_mbl6.2)
+
+table(is.na(match(nm_ids_mbl6.2, nm_ids_mbl6.1)))
+table(is.na(match(nm_ids_mbl6.1, nm_ids_mbl6.2)))
+# there are 16 more IDs in nm_ids_mbl6.2, so use that one
+# the rest of the IDs match
+
+# look at the additional 16 IDs in nm_ids_mbl6.2
+addtl_ids <- nm_ids_mbl6.2[which(is.na(match(nm_ids_mbl6.2, nm_ids_mbl6.1)))]
+rowData(mbl6_old)[which(!is.na(match(rowData(mbl6_old)$ID,
+                                        addtl_ids))),]
+
+```
+
+```{r add_bl6_sce_ids, message = FALSE}
+
+nr_bl6 <- length(nm_ids_mbl6.2)
+pos_bl6 <- which(!is.na(match(rowData(mbl6_old)$ID, nm_ids_mbl6.2)))
+
+# none of the symbols to be added are actually IDs
+length(grep("ENSMUS", rowData(mbl6_old)$Symbol))
+
+# simply add these IDs using rbind
+# the gene names are put gene names 
+add_mbl6_sce <- list(
+  ids = data.frame(
+    ensembl_mbl6_id = nm_ids_mbl6.2,
+    ensembl_mcar_id = vector("character", length = nr_bl6),
+    ensembl_mcas_id = vector("character", length = nr_bl6),
+    ensembl_mspr_id = vector("character", length = nr_bl6)
+  ),
+  gene_names = data.frame(
+    ensembl_mbl6_id = nm_ids_mbl6.2,
+    mbl6_external_gene_name = rowData(mbl6_old)$Symbol[pos_bl6],
+    mcar_mmusculus_homolog_associated_gene_name = vector("character",
+                                                         length = nr_bl6),
+    mcas_mmusculus_homolog_associated_gene_name = vector("character", 
+                                                         length = nr_bl6),
+    mspr_mmusculus_homolog_associated_gene_name = vector("character", 
+                                                         length = nr_bl6)
+ ),
+ synonyms = data.frame(
+   ensembl_mbl6_id = nm_ids_mbl6.2,
+   mbl6_external_gene_name = rowData(mbl6_old)$ID[pos_bl6],
+   synonym.1 =  vector("character", length = nr_bl6),
+   synonym.2 = vector("character", length = nr_bl6),
+   synonym.3 = vector("character", length = nr_bl6),
+   synonym.4 = vector("character", length = nr_bl6),
+   synonym.5 = vector("character", length = nr_bl6),
+   synonym.6 = vector("character", length = nr_bl6)
+  ),
+  metadata = data.frame(
+    ensembl_mbl6_id = nm_ids_mbl6.2,
+    duplicated = vector("character", length = nr_bl6),
+    source = rep("BL6_SCE_object", length = nr_bl6),
+    notes = rep("Possibly_deprecated", length =nr_bl6)
+  )
+)
+
+head(add_mbl6_sce$ids)
+head(add_mbl6_sce$gene_names)
+nrow(add_mbl6_sce$ids)
+
+# I added "possibly deprecated" because I had a hard time finding
+# some of these IDs on the mgi website
+
+```
+
+```{r rbind_bl6_sce_ids, message = FALSE}
+
+insp_ref$ids <- rbind(insp_ref$ids, add_mbl6_sce$ids)
+insp_ref$gene_names  <- rbind(insp_ref$gene_names, add_mbl6_sce$gene_names)
+insp_ref$synonyms <- rbind(insp_ref$synonyms, add_mbl6_sce$synonyms)
+insp_ref$metadata <- rbind(insp_ref$metadata, add_mbl6_sce$metadata)
+
+tail(insp_ref$ids)
+tail(insp_ref$metadata)
+
+```
+
+### Gene Names
+
+Add gene names as synonyms.
+
+```{r compare_bl6_sce_names, message = FALSE}
+
+# these gene names are only in BL6_SCE_object and not in insp_ref:
+nm_gn_mbl6.1<- rowData(mbl6_bm2_unm)$Symbol[
+  which(is.na(match(rowData(mbl6_bm2_unm)$Symbol, 
+                    insp_ref$gene_names$mbl6_external_gene_name)))]
+length(nm_gn_mbl6.1)
+
+nm_gn_mbl6.2 <- rowData(mbl6_old)$Symbol[
+  which(is.na(match(rowData(mbl6_old)$Symbol,
+                    insp_ref$gene_names$mbl6_external_gene_name)))]
+length(nm_gn_mbl6.2)
+# around 4000 gene names are found in BL6_Sce_objects
+# there are 6 more gene names in nm_gn_mbl6.2 than in nm_gn_mbl6.1
+
+table(is.na(match(nm_gn_mbl6.1, nm_gn_mbl6.2)))
+table(is.na(match(nm_gn_mbl6.2, nm_gn_mbl6.1)))
+# but all gene names seem to match
+table(duplicated(nm_gn_mbl6.2))
+table(duplicated(rownames(mbl6_old)))
+# there are some duplicates in the mbl6_old symbols and rownames
+# use nm_gn_mbl6.2 to take the duplicates as well
+
+# are any of these already in the synonyms?
+insp_ref$synonyms[which(!is.na(match(insp_ref$synonyms$synonym.1, 
+                                     nm_gn_mbl6.2))),]
+
+```
+
+```{r add_bl6_sce_names, message = FALSE}
+
+# these are the IDs of gene names that are only in SCEobject
+nm_gn_mbl6_ids <- rowData(mbl6_old)$ID[
+  which(is.na(match(rowData(mbl6_old)$Symbol, 
+                    insp_ref$gene_names$mbl6_external_gene_name)))]
+length(nm_gn_mbl6_ids)
+
+table(is.na(match(insp_ref$ids$ensembl_mbl6_id, nm_gn_mbl6_ids)))
+table(is.na(match(nm_gn_mbl6_ids, insp_ref$ids$ensembl_mbl6_id)))
+# all of these around 4000 IDs are in insp_ref now that I added all
+# add these gene names as synonyms 
+# some of these IDs are duplicated in insp_ref
+
+insp_ref$ids[which(!is.na(match(insp_ref$ids$ensembl_mbl6_id,
+                                nm_gn_mbl6_ids))),]
+insp_ref$gene_names[which(!is.na(match(insp_ref$ids$ensembl_mbl6_id, 
+                                       nm_gn_mbl6_ids))),]
+# just add these as synonyms regardless of existence of a gene name in insp_ref
+
+# position in insp_ref synonyms to be filled
+tb_replaced_pos <- which(!is.na(match(insp_ref$ids$ensembl_mbl6_id,
+                                      nm_gn_mbl6_ids)))
+
+# positions in rowData(sce) used to fill in
+rep_pos <- match(insp_ref$ids$ensembl_mbl6_id[tb_replaced_pos], 
+                 rowData(mbl6_old)$ID)
+
+insp_ref$synonyms$synonym.1[
+  tb_replaced_pos] <- rowData(mbl6_old)$Symbol[rep_pos]
+insp_ref$metadata$notes[tb_replaced_pos] <- paste(
+  insp_ref$metadata$notes[tb_replaced_pos], 
+  "Synonym_from_BL6_SCE", sep = " ")
+
+tail(insp_ref$metadata)
+table(is.na(match(rowData(mbl6_old)$Symbol, 
+                  insp_ref$gene_names$mbl6_external_gene_name)))
+table(is.na(match(rowData(mbl6_old)$Symbol, 
+                  insp_ref$synonyms$synonym.1)))
+# all symbols in these object are either in gene_names or synonyms
+
+table(is.na(match(rowData(mbl6_bm2_unm)$Symbol, 
+                  insp_ref$gene_names$mbl6_external_gene_name)))
+table(is.na(match(rowData(mbl6_bm2_unm)$Symbol, 
+                  insp_ref$synonyms$synonym.1)))
+
+```
+
+## Caroli
+
+The Caroli objects were determined to contain identical IDs and Symbols.
+
+### IDs
+
+```{r compare_caroli_sce, message = FALSE}
+
+table(is.na(match(rowData(mcar_old)$ID, 
+                  insp_ref$ids$ensembl_mcar_id)))
+table(is.na(match(rowData(mcar_old)$Symbol, 
+                  insp_ref$gene_names$mbl6_external_gene_name)))
+# good overlap of IDs but gene names overlap is quite bad
+
+```
+
+```{r compare_caroli_sce_ids, message = FALSE}
+
+# there are around 300 IDs in the SCE object which are not in the insp_ref
+nm_ids_car <- rowData(mcar_old)$ID[which(is.na(match(
+  rowData(mcar_old)$ID, insp_ref$ids$ensembl_mcar_id)))]
+length(nm_ids_car)
+
+head(rowData(mcar_old)[which(!is.na(match(rowData(mcar_old)$ID, nm_ids_car))),])
+
+head(nm_ids_car)
+# some of these genes seem to overlap with some genes for which CAST_sc_eobject
+# also unique IDs (from looking at MGI website)
+
+```
+
+
+```{r add_caroli_sce_ids, message = FALSE}
+
+# simply add these IDs using rbind
+
+nr_mcar <- length(nm_ids_car)
+pos_mcar <- which(!is.na(match(rowData(mcar_old)$ID, nm_ids_car)))
+
+# qa lot of the symbols to be added are actually IDs which must be removed later
+length(grep("MGP", rowData(mcar_old)$Symbol))
+
+add_mcar_sce <- list(
+  ids = data.frame(
+    ensembl_mbl6_id = vector("character", length = nr_mcar),
+    ensembl_mcar_id = nm_ids_car,
+    ensembl_mcas_id = vector("character", length = nr_mcar),
+    ensembl_mspr_id = vector("character", length = nr_mcar)
+  ),
+  gene_names = data.frame(
+    ensembl_mbl6_id = vector("character", length = nr_mcar),
+    mbl6_external_gene_name = rowData(mcar_old)$Symbol[pos_mcar],
+    mcar_mmusculus_homolog_associated_gene_name = rowData(
+      mcar_old)$Symbol[pos_mcar],
+    mcas_mmusculus_homolog_associated_gene_name = vector("character", 
+                                                         length = nr_mcar),
+    mspr_mmusculus_homolog_associated_gene_name = vector("character", 
+                                                         length = nr_mcar)),
+  synonyms = data.frame(
+    ensembl_mbl6_id = vector("character", length = nr_mcar),
+    mbl6_external_gene_name = rowData(mcar_old)$Symbol[pos_mcar],
+    synonym.1 = vector("character", length = nr_mcar),
+    synonym.2 = vector("character", length = nr_mcar),
+    synonym.3 = vector("character", length = nr_mcar),
+    synonym.4 = vector("character", length = nr_mcar),
+    synonym.5 = vector("character", length = nr_mcar),
+    synonym.6 = vector("character", length = nr_mcar)
+  ),
+  metadata = data.frame(
+    ensembl_mbl6_id = vector("character", length = nr_mcar),
+    duplicated = vector("character", length = nr_mcar),
+    source = rep("CARO_SCE_object", length = nr_mcar),
+    notes = vector("character", length = nr_mcar)
+  )
+)
+
+nrow(add_mcar_sce$ids)
+
+# since most of the "gene names" are actually just the IDs,
+# remove all IDs 
+
+add_mcar_sce$gene_names$mbl6_external_gene_name[grep(
+  "MGP_CAROLI", 
+  add_mcar_sce$gene_names$mbl6_external_gene_name)] <- paste(" ", sep = " ")
+add_mcar_sce$gene_names$mcar_mmusculus_homolog_associated_gene_name[grep(
+  "MGP_CAROLI", 
+  add_mcar_sce$gene_names$mcar_mmusculus_homolog_associated_gene_name)] <- paste(
+    " ", sep = " ")
+add_mcar_sce$synonyms$mbl6_external_gene_name[grep(
+  "MGP_CAROLI", 
+  add_mcar_sce$synonyms$mbl6_external_gene_name)] <- paste(" ", sep = " ")
+
+unique(add_mcar_sce$gene_names$mbl6_external_gene_name)
+# only very few gene names will be added like this
+
+```
+
+```{r rbind_caroli_sce_ids, message = FALSE}
+
+nrow(insp_ref$ids)
+insp_ref$ids <- rbind(insp_ref$ids, add_mcar_sce$ids)
+insp_ref$gene_names  <- rbind(insp_ref$gene_names, add_mcar_sce$gene_names)
+insp_ref$synonyms <- rbind(insp_ref$synonyms, add_mcar_sce$synonyms)
+insp_ref$metadata <- rbind(insp_ref$metadata, add_mcar_sce$metadata)
+nrow(insp_ref$ids)
+
+```
+
+### Gene Names
+
+```{r rcompare_caroli_sce_names, message = FALSE}
+
+# these gene names are only in BL6_SCEobject and not in insp_ref:
+nm_gn_car <- rowData(mcar_old)$Symbol[
+  which(is.na(match(rowData(mcar_old)$Symbol, 
+                    insp_ref$gene_names$mbl6_external_gene_name)))]
+length(nm_gn_car)
+
+# filter out instances were symbol is just the ID
+nm_gn_car <- nm_gn_car[-grep("MGP_CAROLI", nm_gn_car )]
+length(nm_gn_car)
+
+# 424 gene names are missing from insp_ref
+
+# are any of these already in the synonyms?
+table(!is.na(match(nm_gn_car, insp_ref$synonyms$synonym.1)))
+# yes, they are all already in synonyms
+# this means they were added with data from BL6_SCE-object
+# no further action required
+
+head(insp_ref$metadata[which(!is.na(match(
+  insp_ref$synonyms$synonym.1, nm_gn_car))),])
+nrow(insp_ref$metadata)
+```
+
+## Castaneus
+
+```{r compare_cast_sce, message = FALSE}
+
+# get all info from merged and unmerged (since there were some NAs)
+
+# ids
+table(is.na(match(rowData(mcas_old)$ID, rowData(mcas_bm2_unm)$ID)))
+table(is.na(match(rowData(mcas_bm2_unm)$ID, rowData(mcas_old)$ID)))
+
+table(is.na(match(rowData(mcas_old)$ID, rowData(mcas_renorm)$ID)))
+table(is.na(match(rowData(mcas_renorm)$ID, rowData(mcas_old)$ID)))
+
+table(is.na(match(rowData(mcas_renorm)$ID, rowData(mcas_bm2_unm)$ID)))
+table(is.na(match(rowData(mcas_bm2_unm)$ID, rowData(mcas_renorm)$ID)))
+# mcas_old and _renorm appear identical
+# mcas_old has 14 IDs mcas_bm2_unm doesn't have
+# mcas_bm2_unm has 37 IDs mcas_old doesn't have
+
+# names
+table(is.na(match(rownames(mcas_old), rownames(mcas_bm2_unm))))
+table(is.na(match(rownames(mcas_bm2_unm), rownames(mcas_old))))
+
+table(is.na(match(rownames(mcas_old), rownames(mcas_renorm))))
+table(is.na(match(rownames(mcas_renorm), rownames(mcas_old))))
+
+table(is.na(match(rownames(mcas_renorm), rownames(mcas_bm2_unm))))
+table(is.na(match(rownames(mcas_bm2_unm), rownames(mcas_renorm))))
+# mcas_old and _renorm appear identical
+# mcas_old has 3 names mcas_bm2_unm doesn't have
+# mcas_bm2_unm has 26 names mcas_old doesn't have
+
+
+rowData(mcas_old)$ID[which(is.na(match(rowData(mcas_old)$ID,
+                                       rowData(mcas_bm2_unm)$ID)))]
+rowData(mcas_bm2_unm)$ID[which(is.na(match(rowData(mcas_bm2_unm)$ID,
+                                           rowData(mcas_old)$ID)))]
+# mcas_bm2_unm contains the ENSMUS IDs that were added for mito genes
+# use mcas_old
+
+```
+
+This additional genes in mcas_old are likely explaioned by a change in the 
+cast reference file for cellranger.
+
+# IDs 
+
+```{r compare_cast_ids, message = FALSE}
+
+# look at IDs
+table(is.na(match(rowData(mcas_old)$ID, 
+                  insp_ref$ids$ensembl_mcas_id)))
+table(is.na(match(rowData(mcas_old)$Symbol, 
+                  insp_ref$gene_names$mbl6_external_gene_name)))
+# the overlap is good for IDs, not so great for gene names
+
+length(grep("MGP", rowData(mcas_old)$Symbol))
+length(grep("ENSMUS", rowData(mcas_old)$Symbol))
+
+# remove all MGP IDs from mcas_old
+rowData(mcas_old)$Symbol[grep("MGP", rowData(mcas_old)$Symbol)] <- paste("")
+length(grep("MGP", rowData(mcas_old)$Symbol))
+
+```
+
+```{r add_cast_ids, message = FALSE}
+
+# look the the non-matching IDs
+# there are IDs in the SCE object which are not in the insp_ref
+nm_ids_cast <- rowData(mcas_old)$ID[which(is.na(match(
+  rowData(mcas_old)$ID, insp_ref$ids$ensembl_mcas_id)))]
+length(nm_ids_cast)
+
+nm_ids_cast2 <- rowData(mcas_bm2_unm)$ID[which(is.na(match(
+  rowData(mcas_bm2_unm)$ID, insp_ref$ids$ensembl_mcas_id)))]
+length(nm_ids_cast2)
+
+# just to check again that nm_ids_cast2 only contains additional ensmus IDs
+nm_ids_cast2[which(is.na(match(nm_ids_cast2, nm_ids_cast)))]
+
+# (at least some of) these are the current IDs for the respective gene names 
+# according to MGI website
+
+```
+
+```{r add_cast_ids2, message = FALSE}
+
+nr_mcas <- length(nm_ids_cast)
+pos_mcas <- which(!is.na(match(rowData(mcas_old)$ID,  nm_ids_cast)))
+
+add_mcas_sce <- list(
+  ids = data.frame(
+    ensembl_mbl6_id = vector("character", length = nr_mcas),
+    ensembl_mcar_id = vector("character", length = nr_mcas),
+    ensembl_mcas_id = nm_ids_cast,
+    ensembl_mspr_id = vector("character", length = nr_mcas)
+  ),
+  gene_names = data.frame(
+    ensembl_mbl6_id = vector("character", length = nr_mcas),
+    mbl6_external_gene_name = rowData(mcas_old)$Symbol[pos_mcas],
+    mcar_mmusculus_homolog_associated_gene_name = vector("character",
+                                                         length = nr_mcas),
+    mcas_mmusculus_homolog_associated_gene_name = rowData(mcas_old)$Symbol[
+      pos_mcas],
+    mspr_mmusculus_homolog_associated_gene_name = vector("character", 
+                                                         length = nr_mcas)
+  ),
+  synonyms = data.frame(
+    ensembl_mbl6_id = vector("character", length = nr_mcas),
+    mbl6_external_gene_name = rowData(mcas_old)$Symbol[pos_mcas],
+    synonym.1 = vector("character", length = nr_mcas),
+    synonym.2 = vector("character", length = nr_mcas),
+    synonym.3 = vector("character", length = nr_mcas),
+    synonym.4 = vector("character", length = nr_mcas),
+    synonym.5 = vector("character", length = nr_mcas),
+    synonym.6 = vector("character", length = nr_mcas)
+   ),
+  metadata = data.frame(
+    ensembl_mbl6_id = vector("character", length = nr_mcas),
+    duplicated = vector("character", length = nr_mcas),
+    source = rep("CAST_SCEobject", length = nr_mcas),
+    notes = vector("character", length = nr_mcas)
+  )
+)
+
+nrow(add_mcas_sce$ids)
+unique(add_mcas_sce$gene_names$mbl6_external_gene_name)
+# very few gene names are actually added
+
+```
+
+```{r rbind_cast_ids, message = FALSE}
+
+nrow(insp_ref$id)
+insp_ref$ids <- rbind(insp_ref$ids, add_mcas_sce$ids)
+insp_ref$gene_names  <- rbind(insp_ref$gene_names, add_mcas_sce$gene_names)
+insp_ref$synonyms <- rbind(insp_ref$synonyms, add_mcas_sce$synonyms)
+insp_ref$metadata <- rbind(insp_ref$metadata, add_mcas_sce$metadata)
+tail(insp_ref$metadata)
+nrow(insp_ref$id)
+
+```
+
+# Gene Names
+
+```{r compare_mcas_gn, message = FALSE}
+
+# these gene names are only in CAST_SCE_object and not in insp_ref:
+nm_gn_cas1 <- rowData(mcas_old)$Symbol[which(is.na(match(
+  rowData(mcas_old)$Symbol,
+  insp_ref$gene_names$mbl6_external_gene_name)))]
+length(nm_gn_cas1)
+
+# check second mcas object
+nm_gn_cas2 <- rowData(mcas_bm2_unm)$Symbol[which(is.na(match(
+  rowData(mcas_bm2_unm)$Symbol,
+  insp_ref$gene_names$mbl6_external_gene_name)))]
+# filter out IDs from other SCE object as well
+nm_gn_cas2 <- nm_gn_cas2[-grep("MGP", nm_gn_cas2)]
+length(nm_gn_cas2)
+
+table(is.na(match(nm_gn_cas2, nm_gn_cas1)))
+table(is.na(match(nm_gn_cas1, nm_gn_cas2)))
+# the additional names match, use nm_gn_cas1 because sce_old has more IDs
+
+table(is.na(match(nm_gn_cas1[nm_gn_cas1 != ""], insp_ref$synonyms$synonym.1)))
+# around 2500 of those are already in synonyms
+# which means they were added from BL6_SCEobject
+
+head(insp_ref$metadata[which(!is.na(match(insp_ref$synonyms$synonym.1,
+                                     nm_gn_cas1))),])
+head(insp_ref$synonym[which(!is.na(match(insp_ref$synonyms$synonym.1, 
+                                    nm_gn_cas1))),])
+
+```
+
+```{r add_mcas_gn, message = FALSE}
+
+# for the remaining around 550 gene names neither in gene names nor synonyms,
+# add them as synonyms to the corresponding IDs
+
+nm_gn_cas1 <- nm_gn_cas1[which(is.na(match(nm_gn_cas1, 
+                                           insp_ref$synonyms$synonym.1)))] 
+length(nm_gn_cas1)
+
+# these are the IDs of gene names that are only in SCEobject
+nm_gn_ids_cas <- rowData(mcas_old)$ID[which(
+  !is.na(match(rowData(mcas_old)$Symbol, nm_gn_cas1)))]
+length(nm_gn_ids_cas)
+
+table(is.na(match(insp_ref$ids$ensembl_mcas_id, nm_gn_ids_cas)))
+table(is.na(match(nm_gn_ids_cas, insp_ref$ids$ensembl_mcas_id)))
+# all of the IDs are now in insp_ref
+
+head(insp_ref$ids[which(!is.na(match(insp_ref$ids$ensembl_mcas_id,
+                                nm_gn_ids_cas))),])
+head(insp_ref$gene_names[which(!is.na(match(insp_ref$ids$ensembl_mcas_id, 
+                                       nm_gn_ids_cas))),])
+head(insp_ref$metadata[which(!is.na(match(insp_ref$ids$ensembl_mcas_id,
+                                     nm_gn_ids_cas))),])
+head(insp_ref$synonyms[which(!is.na(match(insp_ref$ids$ensembl_mcas_id, 
+                                     nm_gn_ids_cas))),])
+# most of those IDs already have gene names 
+# (but not in the synonyms DF for some reason)
+# just add these as synonyms regardless of existence of a gene name in insp_ref
+
+```
+
+```{r add_mcas_gn, message = FALSE}
+
+# position in insp_ref synonyms to be filled
+tb_replaced_pos <- which(!is.na(match(insp_ref$ids$ensembl_mcas_id,
+                                      nm_gn_ids_cas)))
+length(tb_replaced_pos)
+
+# positions in rowData(sce) used to fill in
+# match it insp_ref IDs in the required positions because some are duplicated
+replace_pos <- match(insp_ref$ids$ensembl_mcas_id[tb_replaced_pos], 
+                     rowData(mcas_old)$ID)
+length(replace_pos)
+
+insp_ref$synonyms$synonym.2[
+  tb_replaced_pos] <- rowData(mcas_old)$Symbol[replace_pos]
+insp_ref$metadata$notes[
+  tb_replaced_pos] <- paste(insp_ref$metadata$notes[tb_replaced_pos], 
+                            "Synonym2_from_CAST_SCE", sep = " ")
+
+head(insp_ref$synonyms[tb_replaced_pos,])
+head(insp_ref$gene_names[tb_replaced_pos,])
+head(insp_ref$metadata[tb_replaced_pos,])
+
+
+table(is.na(match(rowData(mcas_old)$Symbol[rowData(mcas_old)$Symbol != ""], 
+                  insp_ref$gene_names$mbl6_external_gene_name)))
+# after removing IDs and empty entries from symbols there are still around
+# 3000 gene names left that are not found in insp_ref
+
+table(is.na(match(rowData(mcas_old)$Symbol[rowData(mcas_old)$Symbol != ""], 
+                  insp_ref$synonyms$synonym.1)))
+# they are now found in synonsmy
+
+```
+
+## Spretus
+
+Spretus is a bit different because of the Symbols2 col in rowData.
+It was previously determined that spretus objects have identical IDs
+
+```{r check_spret_sce1, message = FALSE}
+
+table(is.na(match(rowData(mspr_old)$ID, insp_ref$ids$ensembl_mspr_id)))
+table(is.na(match(rowData(mspr_old)$Symbol, insp_ref$ids$ensembl_mspr_id)))
+table(is.na(match(rowData(mspr_old)$Symbols2, insp_ref$ids$ensembl_mspr_id)))
+# in IDs/Symbol of the object, there are 393 more IDs than in insp_ref
+# in Symbols 2, there are 25000 more IDs
+
+table(is.na(match(rowData(mspr_old)$ID, 
+                  insp_ref$gene_names$mbl6_external_gene_name)))
+table(is.na(match(rowData(mspr_old)$Symbol, 
+                  insp_ref$gene_names$mbl6_external_gene_name)))
+table(is.na(match(rowData(mspr_old)$Symbols2, 
+                  insp_ref$gene_names$mbl6_external_gene_name)))
+# of those, 24000 are already in gene names
+
+```
+
+To deal with this easier, the object is changed so that IDs ONLY contains ALL 
+IDs, and Symbols2 ONLY contains ALL Symbold
+
+```{r check_spret_sce2, message = FALSE}
+
+# Change the mspr_old object and for later comparison to the original
+# use mspr_renorm as they were originally identical
+
+table(is.na(match(rowData(mspr_old)$ID,
+                  rowData(mspr_old)$Symbols2[
+                    grep("MGP",rowData(mspr_old)$Symbols2)])))
+
+table(is.na(match(rowData(mspr_old)$Symbols2[
+  grep("MGP",rowData(mspr_old)$Symbols2)], rowData(mspr_old)$ID)))
+
+# There seem to be no additional IDs in Symbols2, only gene names
+# replace IDs in Symbols with ""
+rowData(mspr_old)$Symbols2[grep("MGP",rowData(mspr_old)$Symbols2)] <- paste("")
+
+# are there any non-ids in the ID row?
+rowData(mspr_old)$ID[-grep("MGP", rowData(mspr_old)$ID )]
+
+```
+
+```{r compare_spret_sce, message = FALSE}
+
+# IDS
+table(is.na(match(rowData(mspr_old)$ID, 
+                  insp_ref$ids$ensembl_mspr_id)))
+# around 400 extra IDs in msor_old
+
+table(is.na(match(rowData(mspr_old)$Symbols2, 
+                  insp_ref$gene_names$mbl6_external_gene_name)))
+# around 1700 extra names in mspr_old
+
+```
+
+### IDs
+
+```{r compare_spret_sce_ids, message = FALSE}
+
+# look the the non-matching IDs
+nm_ids_mspr <- rowData(mspr_old)$ID[which(is.na(match(
+  rowData(mspr_old)$ID, insp_ref$ids$ensembl_mspr_id)))]
+length(nm_ids_mspr)
+
+head(rowData(mspr_old)[which(!is.na(match(rowData(mspr_old)$ID, 
+                                          nm_ids_mspr))),])
+nrow(rowData(mspr_old))
+unique(rowData(mspr_old)$Symbols2[which(!is.na(match(rowData(mspr_old)$ID, 
+                                                     nm_ids_mspr)))])
+# only around 20 gene names will be added like this
+
+```
+
+```{r add_spret_sce_ids, message = FALSE}
+
+nr_mspr <- length(nm_ids_mspr)
+pos_mspr <- which(!is.na(match(rowData(mspr_old)$ID, nm_ids_mspr)))
+length(pos_mspr)
+
+# simply add these IDs using rbind
+add_mspr_sce <- list(
+  ids = data.frame(
+    ensembl_mbl6_id = vector("character", length = nr_mspr),
+    ensembl_mcar_id = vector("character", length = nr_mspr),
+    ensembl_mcas_id = vector("character", length = nr_mspr),
+     ensembl_mspr_id = nm_ids_mspr
+    ),
+  gene_names = data.frame(
+    ensembl_mbl6_id = rowData(mspr_old)$Symbols2[pos_mspr],
+    mbl6_external_gene_name = vector("character", length = length(nm_ids_mspr)),
+    mcar_mmusculus_homolog_associated_gene_name = vector("character", 
+                                                         length = nr_mspr),
+    mcas_mmusculus_homolog_associated_gene_name = vector("character", 
+                                                         length = nr_mspr),
+    mspr_mmusculus_homolog_associated_gene_name = rowData(
+      mspr_old)$Symbols2[pos_mspr]
+    ),
+  synonyms = data.frame(
+    ensembl_mbl6_id = vector("character", length = nr_mspr),
+    mbl6_external_gene_name = rowData(mspr_old)$Symbols2[pos_mspr],
+    synonym.1 = vector("character", length = nr_mspr),
+    synonym.2 = vector("character", length = nr_mspr),
+    synonym.3 = vector("character", length = nr_mspr),
+    synonym.4 = vector("character", length = nr_mspr),
+    synonym.5 = vector("character", length = nr_mspr),
+    synonym.6 = vector("character", length = nr_mspr)
+    ),
+  metadata = data.frame(
+    ensembl_mbl6_id = vector("character", length = nr_mspr),
+    duplicated = vector("character", length = nr_mspr),
+    source = rep("SPRET_SCEobject", length = nr_mspr),
+    notes = vector("character", length = nr_mspr)
+    )
+)
+
+nrow(add_mspr_sce)
+head(add_mspr_sce$ids)
+head(add_mspr_sce$gene_names)
+head(add_mspr_sce$metadata)
+
+```
+
+```{r rbind_spret_sce_ids}
+
+nrow(insp_ref$ids)
+insp_ref$ids <- rbind(insp_ref$ids, add_mspr_sce$ids)
+insp_ref$gene_names  <- rbind(insp_ref$gene_names, add_mspr_sce$gene_names)
+insp_ref$synonyms <- rbind(insp_ref$synonyms, add_mspr_sce$synonyms)
+insp_ref$metadata <- rbind(insp_ref$metadata, add_mspr_sce$metadata)
+tail(insp_ref$metadata)
+nrow(insp_ref$ids)
+
+```
+
+### Gene Names
+
+```{r compare_spret_sce_gn, message = FALSE}
+
+# look the the non-matching IDs
+nm_gn_mspr <- rowData(mspr_old)$Symbols2[which(is.na(match(
+  rowData(mspr_old)$Symbols2, insp_ref$gene_names$mbl6_external_gene_name)))]
+length(nm_gn_mspr)
+# around 1700 gene names are not found in insp_ref
+
+table(is.na(match(nm_gn_mspr, insp_ref$synonyms$synonym.1)))
+# apparently, all but six of those gene names are already in synonyms
+
+# add the six remaining gene names
+nm_gn_mspr <- nm_gn_mspr[which(is.na(match(nm_gn_mspr, 
+                                           insp_ref$synonyms$synonym.1)))]
+
+# get the corresponding IDs
+nm_gn_mspr_ids <- rowData(mspr_old)$ID[which(!is.na(
+  match(rowData(mspr_old)$Symbols2, nm_gn_mspr)))]
+
+# check what mspr_old looks like
+rowData(mspr_old)[which(!is.na(match(rowData(mspr_old)$Symbols2, nm_gn_mspr))),]
+
+tb_replaced_mspr <- which(!is.na(match(insp_ref$ids$ensembl_mspr_id, 
+                                       nm_gn_mspr_ids)))
+to_replace_mspr <-  which(!is.na(match(rowData(mspr_old)$ID,
+                                       nm_gn_mspr_ids)))
+
+fill_insp <- match(insp_ref$ids$ensembl_mspr_id[tb_replaced_mspr], 
+                   rowData(mspr_old)$ID[to_replace_mspr])
+
+
+insp_ref$ids[which(!is.na(match(insp_ref$ids$ensembl_mspr_id,
+                                               nm_gn_mspr_ids))),]
+insp_ref$synonyms[which(!is.na(match(insp_ref$ids$ensembl_mspr_id,
+                                               nm_gn_mspr_ids))),]
+
+insp_ref$synonyms$synonym.3[tb_replaced_mspr][fill_insp] <- rowData(
+    mspr_old)$Symbols2[to_replace_mspr]
+insp_ref$metadata$notes[tb_replaced_mspr][fill_insp] <- paste(
+  insp_ref$metadata$notes[tb_replaced_mspr][fill_insp], 
+  "Synonym3_from_MSPR_SCE", sep = ",")
+  
+insp_ref$ids[tb_replaced_mspr,]
+insp_ref$gene_names[tb_replaced_mspr,]
+insp_ref$synonyms[tb_replaced_mspr,]
+insp_ref$metadata[tb_replaced_mspr,]
+
+```
+
+## Checkpoint
+
+```{r save_cp_2, message = FALSE}
+
+list.save(insp_ref, file = "../../data/databases/insp_ref_004.rds")
+
+```
+
+
+```{r load_cp_2, message = FALSE}
+
+insp_ref <- list.load(file = "../../data/databases/insp_ref_004.rds")
+
+```
+
+# Check with Perrine's sources
+
+```{r check_gtf_ids, message = FALSE}
+
+# are there any IDs in the gtf files that are not in insp_ref?
+table(is.na(match(mcar_gtf$gene_id, insp_ref$ids$ensembl_mcar_id[
+  !is.na(insp_ref$ids$ensembl_mcar_id)])))
+table(is.na(match(mcas_gtf$gene_id, insp_ref$ids$ensembl_mcas_id[
+  !is.na(insp_ref$ids$ensembl_mcas_id)])))
+table(is.na(match(mspr_gtf$gene_id, insp_ref$ids$ensembl_mspr_id[
+  !is.na(insp_ref$ids$ensembl_mspr_id)])))
+# no, fortunately not
+
+```
+
+```{r check_gtf_gns, message = FALSE}
+
+# are there any gene names in the gtf files that ar enot in insp_ref?
+table(is.na(match(mcar_gtf$gene_name[which(!is.na(mcar_gtf$gene_name))],
+                  insp_ref$gene_name$mbl6_external_gene_name[which(!is.na(
+                    insp_ref$gene_name$mbl6_external_gene_name != ""))])))
+
+table(is.na(match(mcas_gtf$gene_name[which(!is.na(mcas_gtf$gene_name))],
+                  insp_ref$gene_name$mbl6_external_gene_name[which(!is.na(
+                    insp_ref$gene_name$mbl6_external_gene_name != ""))])))
+
+table(is.na(match(mspr_gtf$gene_name[which(!is.na(mspr_gtf$gene_name))],
+                  insp_ref$gene_name$mbl6_external_gene_name[ which(!is.na(
+                    insp_ref$gene_name$mbl6_external_gene_name != ""))])))
+
+# there are some gene names in mcas (why am I not surprised?)
+# around 3000
+
+# what about synonyms?
+table(is.na(match(mcas_gtf$gene_name[which(!is.na(mcas_gtf$gene_name))],
+                  insp_ref$synonyms$synonym.1[which( !is.na(
+                    insp_ref$gene_name$mbl6_external_gene_name != ""))])))
+table(is.na(match(mcas_gtf$gene_name[which(!is.na(mcas_gtf$gene_name))],
+                  insp_ref$synonyms$synonym.2[which( !is.na(
+                    insp_ref$gene_name$mbl6_external_gene_name != ""))])))
+table(is.na(match(mcas_gtf$gene_name[which(!is.na(mcas_gtf$gene_name))],
+                  insp_ref$synonyms$synonym.3[which( !is.na(
+                    insp_ref$gene_name$mbl6_external_gene_name != ""))])))
+# around 3000 are actually in synonyms
+
+# Add the additional gene names in synonyms 4 in case something changes later
+# and denote the sources of the synonyms in the notes section
+# also, some of these gene_names are NOT found in synonyms.1
+
+# check mcas
+
+add_gn <- mcas_gtf$gene_name[is.na(match(
+  mcas_gtf$gene_name, insp_ref$gene_names$mbl6_external_gene_name[
+    insp_ref$gene_names$mbl6_external_gene_name != ""]))]
+table(is.na(match(add_gn, insp_ref$gene_names$mbl6_external_gene_name)))
+
+add_gn <- add_gn[is.na(match(add_gn, insp_ref$synonyms$synonym.1))]
+length(add_gn)
+add_gn <- add_gn[is.na(match(add_gn, insp_ref$synonyms$synonym.2))]
+length(add_gn)
+
+# nothing to add here
+
+```
+
+
+## Checkpoint
+
+```{r save_cp_2, message = FALSE}
+
+list.save(insp_ref, file = "../../data/databases/insp_ref_005.rds")
+
+```
+
+
+```{r load_cp_2, message = FALSE}
+
+insp_ref <- list.load(file = "../../data/databases/insp_ref_005.rds")
+
+```
+
+
+# Finalize
+
+## Turn "" into NAs
+
+```{r fill_""_nas, message = FALSE}
+
+# For continuity 
+insp_ref$ids$ensembl_mbl6_id[insp_ref$ids$ensembl_mbl6_id == ""] <- NA
+insp_ref$ids$ensembl_mcar_id[insp_ref$ids$ensembl_mcar_id == ""] <- NA
+insp_ref$ids$ensembl_mcas_id[insp_ref$ids$ensembl_mcas_id == ""] <- NA
+insp_ref$ids$ensembl_mspr_id[insp_ref$ids$ensembl_mspr_id == ""] <- NA
+
+
+insp_ref$gene_names$ensembl_mbl6_id[
+  insp_ref$gene_names$ensembl_mbl6_id == ""] <- NA
+insp_ref$gene_names$mbl6_external_gene_name[
+  insp_ref$gene_names$mbl6_external_gene_name == ""] <- NA
+insp_ref$gene_names$mcar_mmusculus_homolog_associated_gene_name[
+  insp_ref$gene_names$mcar_mmusculus_homolog_associated_gene_name == ""] <- NA
+insp_ref$gene_names$mcas_mmusculus_homolog_associated_gene_name[
+  insp_ref$gene_names$mcas_mmusculus_homolog_associated_gene_name == ""] <- NA
+insp_ref$gene_names$mspr_mmusculus_homolog_associated_gene_name[
+  insp_ref$gene_names$mspr_mmusculus_homolog_associated_gene_name == ""] <- NA
+
+insp_ref$synonyms$ensembl_mbl6_id[insp_ref$synonyms$ensembl_mbl6_id == ""] <- NA
+insp_ref$metadata$ensembl_mbl6_id[insp_ref$metadata$ensembl_mbl6_id == ""] <- NA
+
+```
+
+## Add info on duplicates
+
+```{r ensembl_id_duplicates, message = FALSE}
+
+# I was really expecting to have no duplicates
+table(duplicated(insp_ref$ids$ensembl_mbl6_id[which(!is.na(
+  insp_ref$ids$ensembl_mbl6_id))]))
+# but there are some
+
+# which IDs are duplicated
+dup_ids <- insp_ref$ids$ensembl_mbl6_id[
+  which(!is.na(insp_ref$ids$ensembl_mbl6_id))][
+    duplicated(insp_ref$ids$ensembl_mbl6_id[which(!is.na(
+      insp_ref$ids$ensembl_mbl6_id))]) == TRUE]
+
+# look at the rows containing duplicated IDs
+insp_ref$ids[which(!is.na(match(insp_ref$ids$ensembl_mbl6_id, dup_ids))),]
+# they are all CAST derived
+
+# this is problematic because some ensembl IDs have multiple mcas IDs
+# which in return also have multipe ensembl IDs
+# so at the end cast IDs or ensembl ids are basically describing THE SAME THING?
+
+# I will leave these ensembl IDs in there for reference but I really think 
+# this is problematic
+# so I will flag them
+insp_ref$metadata$duplicated[which(!is.na(match(
+  insp_ref$ids$ensembl_mbl6_id, dup_ids)))] <- paste(
+    insp_ref$metadata$duplicated[which(!is.na(match(
+      insp_ref$ids$ensembl_mbl6_id, dup_ids)))], "ENSEMBL_ID", sep = " ")
+
+insp_ref$ids[which(!is.na(match(insp_ref$ids$ensembl_mbl6_id, dup_ids))),]
+insp_ref$gene_names[which(!is.na(match(insp_ref$ids$ensembl_mbl6_id,dup_ids))),]
+insp_ref$synonyms[which(!is.na(match(insp_ref$ids$ensembl_mbl6_id, dup_ids))),]
+insp_ref$metadata[which(!is.na(match(insp_ref$ids$ensembl_mbl6_id, dup_ids))),]
+
+```
+
+
+```{r exspecies_id_duplicates, message = FALSE}
+
+table(duplicated(insp_ref$ids$ensembl_mcar_id[
+  which(!is.na(insp_ref$ids$ensembl_mcar_id))]))
+table(duplicated(insp_ref$ids$ensembl_mcas_id[
+  which(!is.na(insp_ref$ids$ensembl_mcas_id))]))
+table(duplicated(insp_ref$ids$ensembl_mspr_id[
+  which(!is.na(insp_ref$ids$ensembl_mspr_id))]))
+
+# mcar
+dup_ids_mcar <- insp_ref$ids$ensembl_mcar_id[which(!is.na(
+  insp_ref$ids$ensembl_mcar_id))][duplicated(
+    insp_ref$ids$ensembl_mcar_id[which(
+      !is.na(insp_ref$ids$ensembl_mcar_id))]) == TRUE]
+
+insp_ref$ids[which(!is.na(match(
+  insp_ref$ids$ensembl_mcar_id, dup_ids_mcar))),]
+table(table(insp_ref$ids$ensembl_mcar_id[which(!is.na(match(
+  insp_ref$ids$ensembl_mcar_id, dup_ids_mcar)))]))
+
+insp_ref$metadata$duplicated[which(!is.na(match(
+  insp_ref$ids$ensembl_mcar_id, dup_ids_mcar)))] <- paste(
+    insp_ref$metadata$duplicated[which(!is.na(match(
+      insp_ref$ids$ensembl_mcar_id, dup_ids_mcar)))], "MCAR_ID", sep = " ")
+insp_ref$metadata[which(!is.na(match(insp_ref$ids$ensembl_mcar_id, 
+                                     dup_ids_mcar))),]
+
+# mcas
+dup_ids_mcas <- insp_ref$ids$ensembl_mcas_id[which(!is.na(
+  insp_ref$ids$ensembl_mcas_id))][duplicated(insp_ref$ids$ensembl_mcas_id[
+    which(!is.na(insp_ref$ids$ensembl_mcas_id))]) == TRUE]
+
+insp_ref$ids[which(!is.na(match(insp_ref$ids$ensembl_mcas_id, dup_ids_mcas))),]
+table(table(insp_ref$ids$ensembl_mcas_id[which(
+  !is.na(match(insp_ref$ids$ensembl_mcas_id, dup_ids_mcas)))]))
+
+insp_ref$metadata$duplicated[which(!is.na(match(
+  insp_ref$ids$ensembl_mcas_id, dup_ids_mcas)))] <- paste(
+    insp_ref$metadata$duplicated[which(!is.na(match(
+      insp_ref$ids$ensembl_mcas_id, dup_ids_mcas)))], "MCAS_ID", sep = " ")
+insp_ref$metadata[which(!is.na(match(insp_ref$ids$ensembl_mcas_id, 
+                                     dup_ids_mcas))),]
+
+# mspr
+dup_ids_mspr <- insp_ref$ids$ensembl_mspr_id[which(!is.na(
+  insp_ref$ids$ensembl_mspr_id))][duplicated(insp_ref$ids$ensembl_mspr_id[
+    which(!is.na(insp_ref$ids$ensembl_mspr_id))]) == TRUE]
+
+insp_ref$ids[which(!is.na(match(insp_ref$ids$ensembl_mspr_id, dup_ids_mspr))),]
+table(table(insp_ref$ids$ensembl_mspr_id[which(!is.na(match(
+  insp_ref$ids$ensembl_mspr_id, dup_ids_mspr)))]))
+
+insp_ref$metadata$duplicated[which(!is.na(match(
+  insp_ref$ids$ensembl_mspr_id, dup_ids_mspr)))] <- paste(
+    insp_ref$metadata$duplicated[which(!is.na(match(
+      insp_ref$ids$ensembl_mspr_id, dup_ids_mspr)))], "MSPR_ID", sep = " ")
+insp_ref$metadata[which(!is.na(match(insp_ref$ids$ensembl_mspr_id, 
+                                     dup_ids_mspr))),]
+
+```
+
+```{r exspecies_id_duplicates_check, message = FALSE}
+
+pos_mcar_dup <- grep("MCAR_ID", insp_ref$metadata$duplicated)
+pos_mcas_dup <- grep("MCAS_ID", insp_ref$metadata$duplicated)
+pos_mspr_dup <- grep("MSPR_ID", insp_ref$metadata$duplicated)
+pos_bl6_dup <- grep("ENSEMBL_ID", insp_ref$metadata$duplicated)
+
+# duplicated IDs between exotic species overlap
+table(is.na(match(pos_mcar_dup, pos_mcas_dup)))
+table(is.na(match(pos_mcar_dup, pos_mspr_dup)))
+table(is.na(match(pos_mcas_dup, pos_mspr_dup)))
+
+table(is.na(match(pos_bl6_dup, pos_mcas_dup)))
+# as suspected, duplicated MCAS_IDs and ENSEMBL_IDs do co-exist
+insp_ref$metadata[pos_mcas_dup[which(!is.na(match(pos_mcas_dup,
+                                                  pos_bl6_dup)))],]
+
+# check if there are some corresponding MCAS_IDs in the mouse-derived part 
+# of insp_ref
+
+# these are the MCAS_IDs of rows that contain duplicated ENSEMBL IDs
+mcas_ids_coinc <- insp_ref$ids$ensembl_mcas_id[pos_bl6_dup]
+
+# print all rows containing these MCAS_ÌDS
+insp_ref$ids[which(!is.na(match(insp_ref$ids$ensembl_mcas_id,
+                                mcas_ids_coinc))),]
+# luckily, no MCAS_IDs in the mouse-derived part of insp_ref
+# is matched to an ENSMUS ID which is duplicated
+
+# how many rows are affected by duplicates?
+
+length(insp_ref$metadata$duplicated[insp_ref$metadata$duplicated != ""])
+
+```
+
+In total, 1379 rows are affected by duplicated IDs, this doesn't seem too bad 
+for an object with over 90,000 rows.
+
+Note: this is not the sum of the number of duplicated IDs per species for 
+two reasons:
+
+1) The function duplicate() only prints the duplicates, not originals, 
+so the number of affected rows is higher than the printed number, since the
+rows containing the originals are technically also affected.
+To account for this I paid attention to use 
+object[which(!is.na(match(object, duplicates)))] to also capture the originals.
+
+2) Some duplicates affect the same row, 
+decreasing the total number of rows affected.
+
+```{r gene_name_duplicates, message = FALSE}
+
+# I don't care about the mcar/mcas/mspr gene_names at the moment.
+# I just added those for reference, not for actual use.
+
+table(duplicated(insp_ref$gene_names$mbl6_external_gene_name[which(
+  !is.na(insp_ref$gene_names$mbl6_external_gene_name))]))
+
+dup_gn <- insp_ref$gene_names$mbl6_external_gene_name[which(!is.na(
+  insp_ref$gene_names$mbl6_external_gene_name))][duplicated(
+    insp_ref$gene_names$mbl6_external_gene_name[which(!is.na(
+      insp_ref$gene_names$mbl6_external_gene_name))]) == TRUE]
+
+insp_ref$gene_names[which(!is.na(match(
+  insp_ref$gene_names$mbl6_external_gene_name, dup_gn))),]
+table(table(insp_ref$gene_names$mbl6_external_gene_name[which(
+  !is.na(match(insp_ref$gene_names$mbl6_external_gene_name, dup_gn)))]))
+
+
+insp_ref$metadata$duplicated[which(!is.na(match(
+  insp_ref$gene_names$mbl6_external_gene_name, dup_gn)))] <- paste(
+    insp_ref$metadata$duplicated[which(!is.na(match(
+      insp_ref$gene_names$mbl6_external_gene_name, dup_gn)))],
+    "GENE_NAME", sep = " ")
+insp_ref$metadata[which(!is.na(match(
+  insp_ref$gene_names$mbl6_external_gene_name, dup_gn))),]
+
+length(insp_ref$metadata$duplicated[grep("GENE_NAME", 
+                                         insp_ref$metadata$duplicate)])
+
+```
+
+# Save Expanded
+
+```{r save_prelim, message = FALSE}
+
+list.save(insp_ref, file = "../../data/databases/insp_ref_comp.rds")
+
+```
+
+
+```{r load_prelim, message = FALSE}
+
+insp_ref <- list.load(file = "../../data/databases/insp_ref_comp.rds")
+
+```
+

@@ -1,0 +1,260 @@
+---
+author: "lea wölbert"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries}
+library(SingleCellExperiment)
+library(rlist)
+```
+
+
+```{r load_expanded, message = FALSE}
+
+insp_ref <- list.load(file = "../../data/databases/insp_ref_comp.rds")
+
+```
+
+```{r load_sce_objects, message = FALSE}
+
+# bm objects merged
+mbl6_sce <- readRDS(file = "../../data/sce_objects/mbl6/mmus_old_00C")
+mcar_sce <- readRDS(file = "../../data/sce_objects/mcar/mcar_old_00C")
+mcas_sce <- readRDS(file = "../../data/sce_objects/mcas/mcas_old_00C")
+mspr_sce <- readRDS(file = "../../data/sce_objects/mspr/mspr_old_00C")
+
+```
+
+
+```{r subset, message = FALSE}
+
+# How many ensmus IDs have mapping to IDs from all three species?
+
+filled_id_mcar <- which(!is.na(insp_ref$ids$ensembl_mcar_id))
+filled_id_mcas <- which(!is.na(insp_ref$ids$ensembl_mcas_id))
+filled_id_mspr <- which(!is.na(insp_ref$ids$ensembl_mspr_id))
+length(filled_id_mcar)
+length(filled_id_mcas)
+length(filled_id_mspr)
+# around 40,000 IDs are found in all objects
+
+mcar_ens_ids <- insp_ref$ids$ensembl_mbl6_id[filled_id_mcar]
+mcas_ens_ids <- insp_ref$ids$ensembl_mbl6_id[filled_id_mcas]
+mspr_ens_ids <- insp_ref$ids$ensembl_mbl6_id[filled_id_mspr]
+
+
+mcar_mcas_shared_ids <- mcar_ens_ids[!is.na(mcar_ens_ids)][
+  !is.na(match(
+    mcar_ens_ids[!is.na(mcar_ens_ids)],
+    mcas_ens_ids[!is.na(mcas_ens_ids)]))]
+table(is.na(mcar_mcas_shared_ids))
+
+mcar_spr_shared_ids <- mcar_ens_ids[!is.na(mcar_ens_ids)][
+  !is.na(match(
+    mcar_ens_ids[!is.na(mcar_ens_ids)],
+    mspr_ens_ids[!is.na(mspr_ens_ids)]))]
+table(is.na(mcar_spr_shared_ids))
+
+mcas_spr_shared_ids <- mcas_ens_ids[!is.na(mcas_ens_ids)][
+  !is.na(match(
+    mcas_ens_ids[!is.na(mcas_ens_ids)],
+    mspr_ens_ids[!is.na(mspr_ens_ids)]))]
+table(is.na(mcas_spr_shared_ids))
+
+# around 20,000 - 30,000 IDs are shared between two exotic species
+
+all_shared_ids <- mcar_mcas_shared_ids[!is.na(match(
+  mcar_mcas_shared_ids,
+  mcas_spr_shared_ids
+))]
+
+table(is.na(all_shared_ids))
+table(duplicated(all_shared_ids))
+#around 23000 shared IDs
+
+table(is.na(match(all_shared_ids, insp_ref$ids$ensembl_mbl6_id)))
+table(is.na(match(insp_ref$ids$ensembl_mbl6_id, all_shared_ids)))
+
+all_shared_ids_pos <- which(!is.na(match(insp_ref$ids$ensembl_mbl6_id,
+                                         all_shared_ids)))
+length(all_shared_ids_pos)
+
+table(is.na(match(all_shared_ids, 
+                  insp_ref$ids$ensembl_mbl6_id[all_shared_ids_pos])))
+
+# make a shared object that only contains genes that have IDs for all species
+insp_ref_shared <- insp_ref
+insp_ref_shared$ids <- insp_ref_shared$ids[all_shared_ids_pos,]
+insp_ref_shared$gene_names <- insp_ref_shared$gene_names[all_shared_ids_pos,]
+insp_ref_shared$synonyms <- insp_ref_shared$synonyms[all_shared_ids_pos,]
+insp_ref_shared$metadata <- insp_ref_shared$metadata[all_shared_ids_pos,]
+tail(insp_ref_shared$metadata)
+nrow(insp_ref_shared$ids)
+
+```
+
+```{r check_shared_empty, message = FALSE}
+
+insp_ref_shared$ids[is.na(insp_ref_shared$ids$ensembl_mbl6_id),]
+insp_ref_shared$ids[is.na(insp_ref_shared$ids$ensembl_mcar_id),]
+insp_ref_shared$ids[is.na(insp_ref_shared$ids$ensembl_mcas_id),]
+insp_ref_shared$ids[is.na(insp_ref_shared$ids$ensembl_mspr_id),]
+
+```
+
+
+```{r check_shared_duplicates1, message = FALSE}
+
+# check for duplicates WITHIN shared_insp_ref
+
+# Check the shared IDs
+table(duplicated(insp_ref_shared$ids$ensembl_mbl6_id))
+table(duplicated(insp_ref_shared$ids$ensembl_mcar_id))
+table(duplicated(insp_ref_shared$ids$ensembl_mcas_id))
+table(duplicated(insp_ref_shared$ids$ensembl_mspr_id))
+# now even less genes are duplicated
+# in total, 147 duplications exist in the shared insp
+
+table(table(insp_ref_shared$ids$ensembl_mbl6_id))
+table(table(insp_ref_shared$ids$ensembl_mcar_id))
+table(table(insp_ref_shared$ids$ensembl_mcas_id))
+table(table(insp_ref_shared$ids$ensembl_mspr_id))
+# and they are duplicated in lower numbers (up to three)
+
+
+# check the duplicated gene names
+table(duplicated(insp_ref_shared$gene_names$mbl6_external_gene_name))
+# 7 gene names are duplicated
+table(table(insp_ref_shared$gene_names$mbl6_external_gene_name))
+
+```
+
+```{r add_info_duplicates_within, message = FALSE}
+
+insp_ref_shared$metadata$notes[which(!is.na(match(
+  insp_ref_shared$ids$ensembl_mcar_id,
+  insp_ref_shared$ids$ensembl_mcar_id[
+    duplicated(insp_ref_shared$ids$ensembl_mcar_id)])))] <- paste(
+      insp_ref_shared$metadata$notes[which(!is.na(match(
+  insp_ref_shared$ids$ensembl_mcar_id,
+  insp_ref_shared$ids$ensembl_mcar_id[
+    duplicated(insp_ref_shared$ids$ensembl_mcar_id)])))], 
+      "MCAR_ID_within", sep = " ")
+
+insp_ref_shared$metadata$notes[which(!is.na(match(
+  insp_ref_shared$ids$ensembl_mcas_id,
+  insp_ref_shared$ids$ensembl_mcas_id[
+    duplicated(insp_ref_shared$ids$ensembl_mcas_id)])))] <- paste(
+      insp_ref_shared$metadata$notes[which(!is.na(match(
+        insp_ref_shared$ids$ensembl_mcas_id,
+        insp_ref_shared$ids$ensembl_mcas_id[duplicated(
+          insp_ref_shared$ids$ensembl_mcas_id)])))],
+      "MCAS_ID_within", sep = " ")
+
+insp_ref_shared$metadata$notes[which(!is.na(match(
+  insp_ref_shared$ids$ensembl_mspr_id,
+  insp_ref_shared$ids$ensembl_mspr_id[duplicated(
+    insp_ref_shared$ids$ensembl_mspr_id)])))] <- paste(
+      insp_ref_shared$metadata$notes[which(!is.na(match(
+        insp_ref_shared$ids$ensembl_mspr_id, 
+        insp_ref_shared$ids$ensembl_mspr_id[
+          duplicated(insp_ref_shared$ids$ensembl_mspr_id)])))],
+      "MSPR_ID_within", sep = " ")
+
+
+insp_ref_shared$metadata$notes[grep("within", insp_ref_shared$metadata$notes)]
+length(grep("within", insp_ref_shared$metadata$notes))
+
+# most duplications affect one than more species
+# total 181 rows with duplicated in 
+
+```
+
+```{r check_shared_duplicates1, message = FALSE}
+
+# check for duplicates including shared_insp_ref and insp_ref
+insp_ref_shared$ids[which(!is.na(match(
+  insp_ref_shared$metadata$duplicated, 
+  unique(insp_ref_shared$metadata$duplicated[
+    insp_ref_shared$metadata$duplicated != ""])))),]
+
+insp_ref_shared$metadata[which(!is.na(match(
+  insp_ref_shared$metadata$duplicated, 
+  unique(insp_ref_shared$metadata$duplicated[
+    insp_ref_shared$metadata$duplicated != ""])))),]
+
+length(which(!is.na(match(
+  insp_ref_shared$metadata$duplicated, 
+  unique(insp_ref_shared$metadata$duplicated
+         [insp_ref_shared$metadata$duplicated != ""])))))
+
+# 371 rows have duplications in either gene name or ID in the insp_ref dataset (all)
+
+```
+
+# Save shared
+
+```{r save_prelim, message = FALSE}
+
+list.save(insp_ref_shared, file = "../../data/databases/insp_ref_shared.rds")
+
+```
+
+```{r save_prelim, message = FALSE}
+
+insp_ref_shared <- list.load(file = "../../data/databases/insp_ref_shared.rds")
+
+```
+
+# Test addition of data to SCE objects
+
+```{r add_to_sce, message = FALSE}
+
+# BL6
+# check if all matches are available
+table(is.na(match(rowData(mbl6_sce)$ID, insp_ref$ids$ensembl_mbl6_id)))
+#yes, so no need to match
+#still add it in an extra column for convenience
+rowData(mbl6_sce)$ensembl.ID <- rowData(mbl6_sce)$ID
+
+#CARO
+table(is.na(match(rowData(mcar_sce)$ID, insp_ref$ids$ensembl_mcar_id)))
+
+rowData(mcar_sce)$ensembl.ID <- insp_ref$ids$ensembl_mbl6_id[
+  match(rowData(mcar_sce)$ID, insp_ref$ids$ensembl_mcar_id)]
+# there are around 10000 NAs
+table(is.na(rowData(mcar_sce)$ensembl.ID ))
+table(is.na(insp_ref$ids$ensembl_mbl6_id[
+  which(!is.na(insp_ref$ids$ensembl_mcar_id))]))
+# which corresponds EXACTLY to the number of empty ensembl ID slots in insp_ref
+# around 26000 IDs were added tho
+
+# CAST
+table(is.na(match(rowData(mcas_sce)$ID, insp_ref$ids$ensembl_mcas_id)))
+
+rowData(mcas_sce)$ensembl.ID <- insp_ref$ids$ensembl_mbl6_id[
+  match(rowData(mcas_sce)$ID, insp_ref$ids$ensembl_mcas_id)]
+table(is.na(rowData(mcas_sce)$ensembl.ID ))
+table(is.na(insp_ref$ids$ensembl_mbl6_id[which(!is.na(
+  insp_ref$ids$ensembl_mcas_id))]))
+
+
+# SPRET
+table(is.na(match(rowData(mspr_sce)$ID, insp_ref$ids$ensembl_mspr_id)))
+
+rowData(mspr_sce)$ensembl.ID <- insp_ref$ids$ensembl_mbl6_id[
+  match(rowData(mspr_sce)$ID, insp_ref$ids$ensembl_mspr_id)]
+table(is.na(rowData(mspr_sce)$ensembl.ID ))
+table(is.na(insp_ref$ids$ensembl_mbl6_id[
+  which(!is.na(insp_ref$ids$ensembl_mspr_id))]))
+
+```
+
+Matching the ensembl IDs to the object works but some empty slots in the
+ensembl.ID column are to be expected.
+
+Around 27000 genes remain even if the empty ensembl IDs are subset out.

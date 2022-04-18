@@ -1,0 +1,530 @@
+---
+author: "lea wölbert"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Preparation
+
+## Libraries
+
+```{r libraries, message = FALSE}
+
+library(SingleCellExperiment)
+library(tidyverse)
+library(scuttle)
+library(scran)
+library(rlist)
+
+```
+
+## Load
+
+### Code
+
+```{r load_code, message = FALSE}
+
+source(file = "../code/ext_code/InteractionRanking.r")
+source(file = "../code/source_code/cci_functions.r")
+source(file = "../code/source_code/colourscheme.R")
+source(file = "../code/source_code/filepath.R")
+
+```
+
+### Objects
+
+```{r load_lrdb, message = FALSE}
+
+lrdb <- list.load(file = paste(
+  filepath_lv2,
+  "data/databases/lrdb_anno.rds",
+  sep = "")
+)
+
+lrdb_part <- list.load(file = paste(
+  filepath_lv2,
+  "data/databases/lrdb_part.rds",
+  sep = "")
+)
+
+```
+
+```{r load_mgi, message = FALSE}
+
+mgi_conv <- read.delim(file = paste(
+  filepath_lv2,
+  "data/databases/HGNC_AllianceHomology.rpt.txt",
+  sep = ""),
+  header = TRUE)
+
+```
+
+# Check
+
+Use the mgi conversion table to check if the names match between mgi and lrdb.
+
+```{r}
+
+mgi_conv
+
+test_ligandlist <- mgi_conv$MGI.Accession.ID[
+  !is.na(match(mgi_conv$NCBI.Gene.strand, 
+               lrdb$interactions$ligand_ensembl_id))]
+
+setequal(test_ligandlist, lrdb$interactions$ligand_symbol)
+
+```
+
+They don't. Why?
+
+```{r}
+
+length(unique(lrdb$interactions$ligand_symbol))
+length(unique(lrdb$interactions$ligand_ensembl_id))
+length(unique(lrdb$interactions$receptor_symbol))
+length(unique(lrdb$interactions$receptor_ensembl_id))
+# one ligand ID must have two ligand symbols
+
+ligand_id <- lrdb$interactions$ligand_ensembl_id
+
+for(i in unique(ligand_id)){
+  print(i)
+  print(lrdb$interactions$ligand_symbol[
+    lrdb$interactions$ligand_ensembl_id == i][
+      duplicated(lrdb$interactions$ligand_symbol[
+    lrdb$interactions$ligand_ensembl_id == i]) == FALSE
+    ])
+}
+
+# the culprit is ENSMUSG00000048534
+lrdb$interactions[lrdb$interactions$ligand_ensembl_id == "ENSMUSG00000048534",]
+lrdb$interactions[lrdb$interactions$ligand_symbol == "Amica1",]
+lrdb$sources[lrdb$interactions$ligand_symbol == "Amica1",]
+
+# JAML1 is the correct gene name
+
+# remove Amica1
+lrdb$sources <- lrdb$sources[lrdb$interactions$ligand_symbol != "Amica1",]
+lrdb$ligands <- lrdb$ligands[lrdb$interactions$ligand_symbol != "Amica1",]
+lrdb$receptors <- lrdb$receptors[lrdb$interactions$ligand_symbol != "Amica1",]
+lrdb$interactions <- lrdb$interactions[
+  lrdb$interactions$ligand_symbol != "Amica1",]
+
+nrow(lrdb$sources)
+
+length(unique(lrdb$interactions$ligand_symbol))
+length(unique(lrdb$interactions$ligand_ensembl_id))
+length(unique(lrdb$interactions$receptor_symbol))
+length(unique(lrdb$interactions$receptor_ensembl_id))
+
+```
+
+## Test ligands
+
+Check if there ligands all match mgi.
+The remaining non-matching gene names are most likely "old" gene names
+just taken from mjdb that were updated in mgi in the meantime.
+
+```{r}
+
+test_ligandlist <- mgi_conv$MGI.Accession.ID[
+  !is.na(match(mgi_conv$NCBI.Gene.strand, 
+               lrdb$interactions$ligand_ensembl_id))]
+
+setequal(test_ligandlist, unique(lrdb$interactions$ligand_symbol))
+# still not identical
+
+length(test_ligandlist)
+length(unique(lrdb$interactions$ligand_symbol))
+# two IDs too many
+
+lrdb$interactions[is.na(match(
+  lrdb$interactions$ligand_symbol, test_ligandlist)),]
+lrdb$sources[is.na(match(
+  lrdb$interactions$ligand_symbol, test_ligandlist)),]
+
+# get all ligands that don't match
+test_ligandlist[is.na(match(
+  test_ligandlist, unique(lrdb$interactions$ligand_symbol)
+))]
+
+```
+
+```{r}
+
+# find outlier ligands
+mgi_conv[grep("ENSMUSG00000031380", mgi_conv$NCBI.Gene.strand),]
+#Figf
+#Vegfd
+
+mgi_conv[grep("ENSMUSG00000037362", mgi_conv$NCBI.Gene.strand),]
+#Nov
+#Ccn3
+
+mgi_conv[grep("ENSMUSG00000062991", mgi_conv$NCBI.Gene.strand),]
+mgi_conv[grep("ENSMUSG00000118541", mgi_conv$NCBI.Gene.strand),]
+# these IDs are not found in mgi_conv
+# but the one I found on http://www.ensembl.org is
+
+mgi_conv[grep("ENSMUSG00000100916", mgi_conv$NCBI.Gene.strand),]
+mgi_conv[grep("ENSMUSG00000118462", mgi_conv$NCBI.Gene.strand),]
+# these IDs are not found in mgi_conv
+# but the one I found on http://www.ensembl.org is
+
+# these gene names are indeed not found in lrdb
+grep("Vegfd", lrdb$interactions$ligand_symbol)
+grep("Vegfd", lrdb$interactions$receptor_symbol)
+grep("Ccn3", lrdb$interactions$ligand_symbol)
+grep("Ccn3", lrdb$interactions$receptor_symbol)
+
+```
+
+Rename step by step. 
+Figf was incorrect, vegf correct.
+
+```{r}
+
+vegf_position <- which(lrdb$interactions$ligand_symbol == "Figf")
+
+lrdb$ligands$ligand_symbol[vegf_position] <- gsub(
+  "Figf", "Vegfd", lrdb$ligands$ligand_symbol[vegf_position])
+
+lrdb$interactions$interaction_pair[vegf_position] <- gsub(
+  "Figf", "Vegfd", lrdb$interactions$interaction_pair[vegf_position])
+
+lrdb$interactions$ligand_symbol[vegf_position] <- gsub(
+  "Figf", "Vegfd", lrdb$interactions$ligand_symbol[vegf_position])
+
+lrdb$sources$interaction_pair[vegf_position] <- gsub(
+  "Figf", "Vegfd", lrdb$sources$interaction_pair[vegf_position])
+
+lrdb$interactions[vegf_position,]
+
+```
+
+Nov was incorrect, Ccn3 correct.
+
+```{r}
+
+ccn3_position <- which(lrdb$interactions$ligand_symbol == "Nov")
+
+lrdb$ligands$ligand_symbol[ccn3_position] <- gsub(
+  "Nov", "Ccn3", lrdb$ligands$ligand_symbol[ccn3_position])
+
+lrdb$interactions$interaction_pair[ccn3_position] <- gsub(
+  "Nov", "Ccn3", lrdb$interactions$interaction_pair[ccn3_position])
+
+lrdb$interactions$ligand_symbol[ccn3_position] <- gsub(
+  "Nov", "Ccn3", lrdb$interactions$ligand_symbol[ccn3_position])
+
+lrdb$sources$interaction_pair[ccn3_position] <- gsub(
+  "Nov", "Ccn3", lrdb$sources$interaction_pair[ccn3_position])
+
+lrdb$interactions[ccn3_position,]
+
+```
+
+Also, in two cases the IDs were deprecated.
+Since the "old" IDs from mjdb are also the ones found in the SCE 
+objects/insp_ref, I decided to keep those two IDs or it will lead to problems
+later.
+
+```{r}
+
+# will not change the IDs because the "old" Ids in LRDB are also in insp_ref,
+# so if I change, these genes will be lost from the SCE objects
+
+#lhb_position <- which(
+#lrdb$interactions$ligand_ensembl_id == "ENSMUSG00000100916")
+
+#lrdb$ligands$ligand_ensembl_id[lhb_position] <- gsub("ENSMUSG00000100916", 
+#"ENSMUSG00000118462", lrdb$ligands$ligand_ensembl_id[lhb_position])
+
+
+#lrdb$interactions$ligand_ensembl_id[lhb_position] <- gsub(
+#"ENSMUSG00000100916", "ENSMUSG00000118462", 
+#lrdb$interactions$ligand_ensembl_id[lhb_position])
+
+#lrdb$interactions[lhb_position,]
+
+```
+
+```{r}
+
+# will not change the IDs because the "old" Ids in LRDB are also in insp_ref,
+# so if I change, these genes will be lost from the SCE objects
+
+#ngr1_position <- which(l
+#rdb$interactions$ligand_ensembl_id == "ENSMUSG00000062991")
+
+#lrdb$ligands$ligand_ensembl_id[ngr1_position] <- gsub(
+#"ENSMUSG00000062991", "ENSMUSG00000118541", 
+#lrdb$ligands$ligand_ensembl_id[ngr1_position])
+
+
+#lrdb$interactions$ligand_ensembl_id[ngr1_position] <- gsub(
+#"ENSMUSG00000062991", "ENSMUSG00000118541", 
+#lrdb$interactions$ligand_ensembl_id[ngr1_position])
+
+#lrdb$interactions[ngr1_position,]
+
+```
+
+Test again if they match.
+
+```{r}
+
+test_ligandlist <- mgi_conv$MGI.Accession.ID[
+  !is.na(match(mgi_conv$NCBI.Gene.strand, 
+               lrdb$interactions$ligand_ensembl_id))]
+
+
+setequal(test_ligandlist, unique(lrdb$interactions$ligand_symbol))
+
+lrdb$interactions[is.na(match(
+  lrdb$interactions$ligand_symbol, test_ligandlist)),]
+lrdb$sources[is.na(match(
+  lrdb$interactions$ligand_symbol, test_ligandlist)),]
+
+test_ligandlist[is.na(match(
+  test_ligandlist, unique(lrdb$interactions$ligand_symbol)
+))]
+
+```
+
+Still no perfect match but the only remaining ligand IDs are the ones that I 
+decided to keep.
+
+# Receptor list
+
+Repeat for receptors.
+
+```{r}
+
+test_receptorlist <- mgi_conv$MGI.Accession.ID[
+  !is.na(match(mgi_conv$NCBI.Gene.strand, 
+               lrdb$interactions$receptor_ensembl_id))]
+
+
+setequal(test_receptorlist, unique(lrdb$interactions$receptor_symbol))
+
+# still not identical
+length(test_receptorlist)
+length(unique(lrdb$interactions$receptor_symbol))
+
+lrdb$interactions[is.na(match(
+  lrdb$interactions$receptor_symbol, test_receptorlist)),]
+lrdb$sources[is.na(match(
+  lrdb$interactions$receptor_symbol, test_receptorlist)),]
+
+test_receptorlist[is.na(match(
+  test_receptorlist, lrdb$interactions$receptor_symbol
+))]
+
+```
+
+A few more receptors must be updated step by step.
+
+```{r}
+
+mgi_conv[grep("ENSMUSG00000037362", mgi_conv$NCBI.Gene.strand),]
+# nov
+# ccn3
+
+mgi_conv[grep("ENSMUSG00000006378", mgi_conv$NCBI.Gene.strand),]
+# Galr3
+# Gcat
+
+mgi_conv[grep("ENSMUSG00000002885", mgi_conv$NCBI.Gene.strand),]
+# Cd97
+# Adgre5
+
+mgi_conv[grep("ENSMUSG00000038403", mgi_conv$NCBI.Gene.strand),]
+# Hfe2
+# Hjv
+
+mgi_conv[grep("ENSMUSG00000031785", mgi_conv$NCBI.Gene.strand),]
+# Gpr56
+# Adgrg1
+
+mgi_conv[grep("ENSMUSG00000046432", mgi_conv$NCBI.Gene.strand),]
+# Ngfrap1
+# Bex3
+
+```
+
+```{r}
+
+galr_position <- which(lrdb$interactions$receptor_symbol == "Galr3")
+
+lrdb$receptors$receptor_symbol[galr_position] <- gsub(
+  "Galr3", "Gcat", lrdb$receptors$receptor_symbol[galr_position])
+
+lrdb$interactions$interaction_pair[galr_position] <- gsub(
+  "Galr3", "Gcat", lrdb$interactions$interaction_pair[galr_position])
+
+lrdb$interactions$receptor_symbol[galr_position] <- gsub(
+  "Galr3", "Gcat", lrdb$interactions$receptor_symbol[galr_position])
+
+lrdb$sources$interaction_pair[galr_position] <- gsub(
+  "Galr3", "Gcat", lrdb$sources$interaction_pair[galr_position])
+
+lrdb$interactions[galr_position,]
+lrdb$receptors[galr_position,]
+
+```
+
+```{r}
+
+ccn3_position <- which(lrdb$interactions$receptor_symbol == "Nov")
+
+lrdb$receptors$receptor_symbol[ccn3_position] <- gsub(
+  "Nov", "Ccn3", lrdb$receptors$receptor_symbol[ccn3_position])
+
+lrdb$interactions$interaction_pair[ccn3_position] <- gsub(
+  "Nov", "Ccn3", lrdb$interactions$interaction_pair[ccn3_position])
+
+lrdb$interactions$receptor_symbol[ccn3_position] <- gsub(
+  "Nov", "Ccn3", lrdb$interactions$receptor_symbol[ccn3_position])
+
+lrdb$sources$interaction_pair[ccn3_position] <- gsub(
+  "Nov", "Ccn3", lrdb$sources$interaction_pair[ccn3_position])
+
+lrdb$interactions[ccn3_position,]
+
+```
+
+```{r}
+
+cd97_position <- which(lrdb$interactions$receptor_symbol == "Cd97")
+
+lrdb$receptors$receptor_symbol[cd97_position] <- gsub(
+  "Cd97", "Adgre5", lrdb$receptors$receptor_symbol[cd97_position])
+
+lrdb$interactions$interaction_pair[cd97_position] <- gsub(
+  "Cd97", "Adgre5", lrdb$interactions$interaction_pair[cd97_position])
+
+lrdb$interactions$receptor_symbol[cd97_position] <- gsub(
+  "Cd97", "Adgre5", lrdb$interactions$receptor_symbol[cd97_position])
+
+lrdb$sources$interaction_pair[cd97_position] <- gsub(
+  "Cd97", "Adgre5", lrdb$sources$interaction_pair[cd97_position])
+
+lrdb$interactions[cd97_position,]
+lrdb$receptors[cd97_position,]
+
+```
+
+```{r}
+
+hfe2_position <- which(lrdb$interactions$receptor_symbol == "Hfe2")
+
+lrdb$receptors$receptor_symbol[hfe2_position] <- gsub(
+  "Hfe2", "Hjv", lrdb$receptors$receptor_symbol[hfe2_position])
+
+lrdb$interactions$interaction_pair[hfe2_position] <- gsub(
+  "Hfe2", "Hjv", lrdb$interactions$interaction_pair[hfe2_position])
+
+lrdb$interactions$receptor_symbol[hfe2_position] <- gsub(
+  "Hfe2", "Hjv", lrdb$interactions$receptor_symbol[hfe2_position])
+
+lrdb$sources$interaction_pair[hfe2_position] <- gsub(
+  "Hfe2", "Hjv", lrdb$sources$interaction_pair[hfe2_position])
+
+lrdb$interactions[hfe2_position,]
+lrdb$receptors[hfe2_position,]
+
+```
+
+```{r}
+
+gpr56_position <- which(lrdb$interactions$receptor_symbol == "Gpr56")
+
+lrdb$receptors$receptor_symbol[gpr56_position] <- gsub(
+  "Gpr56", "Adgrg1", lrdb$receptors$receptor_symbol[gpr56_position])
+
+lrdb$interactions$interaction_pair[gpr56_position] <- gsub(
+  "Gpr56", "Adgrg1", lrdb$interactions$interaction_pair[gpr56_position])
+
+lrdb$interactions$receptor_symbol[gpr56_position] <- gsub(
+  "Gpr56", "Adgrg1", lrdb$interactions$receptor_symbol[gpr56_position])
+
+lrdb$sources$interaction_pair[gpr56_position] <- gsub(
+  "Gpr56", "Adgrg1", lrdb$sources$interaction_pair[gpr56_position])
+
+lrdb$interactions[gpr56_position,]
+lrdb$receptors[gpr56_position,]
+
+```
+
+```{r}
+
+ngfrap1_position <- which(lrdb$interactions$receptor_symbol == "Ngfrap1")
+
+lrdb$receptors$receptor_symbol[ngfrap1_position] <- gsub(
+  "Ngfrap1", "Bex3", lrdb$receptors$receptor_symbol[ngfrap1_position])
+
+lrdb$interactions$interaction_pair[ngfrap1_position] <- gsub(
+  "Ngfrap1", "Bex3", lrdb$interactions$interaction_pair[ngfrap1_position])
+
+lrdb$interactions$receptor_symbol[ngfrap1_position] <- gsub(
+  "Ngfrap1", "Bex3", lrdb$interactions$receptor_symbol[ngfrap1_position])
+
+lrdb$sources$interaction_pair[ngfrap1_position] <- gsub(
+  "Ngfrap1", "Bex3", lrdb$sources$interaction_pair[ngfrap1_position])
+
+lrdb$interactions[ngfrap1_position,]
+lrdb$receptors[ngfrap1_position,]
+
+```
+
+Check if now everything matches to mgi.
+
+```{r}
+
+test_receptorlist <- mgi_conv$MGI.Accession.ID[
+  !is.na(match(mgi_conv$NCBI.Gene.strand, 
+               lrdb$interactions$receptor_ensembl_id))]
+
+setequal(test_receptorlist, unique(lrdb$interactions$receptor_symbol))
+
+```
+
+It does.
+
+```{r save_lrdb_comp, message = FALSE}
+
+list.save(lrdb, file = paste(
+  filepath_lv2,
+  "data/databases/lrdb_comp.rds",
+  sep = "")
+)
+
+```
+
+Save under different name to account for all manual changes.
+Now LRDB_COMP is the lrdb to be used for CCI analysis.
+
+# lrdb_part
+
+Make lrdb_part to use in same format as mjdb.
+
+```{r save_lrdb_part, message = FALSE}
+
+lrdb_part <- data.frame(
+  Receptor_ENSEMBL = lrdb$receptors$receptor_ensembl_id,
+  Ligand_ENSEMBL = lrdb$ligands$ligand_ensembl_id,
+  Receptor_GeneSymbol = lrdb$receptors$receptor_symbol,
+  Ligand_GeneSymbol = lrdb$ligands$ligand_symbol
+)
+
+list.save(lrdb_part, file = paste(
+  filepath_lv2,
+  "data/databases/lrdb_part.rds",
+  sep = "")
+)
+
+```

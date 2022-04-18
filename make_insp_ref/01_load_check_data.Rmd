@@ -1,0 +1,218 @@
+---
+author: "perrine lacour lea woelbert"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(biomaRt)
+```
+
+This part was taken from Perrine's script on how to download the relevant data 
+from BioMart.
+
+```{r load, message = FALSE}
+ensembl_mouse <- useMart(biomart="ENSEMBL_MART_ENSEMBL",
+                         host="www.ensembl.org",
+                         dataset="mmusculus_gene_ensembl")
+ensembl_list_mbl6 <- getBM(attributes=c("ensembl_gene_id",
+                                        "external_gene_name"), 
+                           mart=ensembl_mouse)
+
+ensembl_mcar <- useMart(biomart="ENSEMBL_MART_ENSEMBL",
+                        host="www.ensembl.org",
+                        dataset="mcaroli_gene_ensembl")
+ensembl_list_mcar <- getBM(attributes=c("ensembl_gene_id",
+                                        "mmusculus_homolog_ensembl_gene",
+                                      "mmusculus_homolog_associated_gene_name"), 
+                           mart=ensembl_mcar)
+
+ensembl_mcas <- useMart(biomart="ENSEMBL_MART_MOUSE",
+                        host="www.ensembl.org",
+                        dataset="mmcasteij_gene_ensembl")
+ensembl_list_mcas <- getBM(attributes=c("ensembl_gene_id",
+                                        "mmusculus_homolog_ensembl_gene",
+                                      "mmusculus_homolog_associated_gene_name"), 
+                           mart=ensembl_mcas)
+
+ensembl_mspr <- useMart(biomart="ENSEMBL_MART_ENSEMBL",
+                        host="www.ensembl.org",
+                        dataset="mspretus_gene_ensembl")
+ensembl_list_mspr=getBM(attributes=c("ensembl_gene_id",
+                                     "mmusculus_homolog_ensembl_gene",
+                                     "mmusculus_homolog_associated_gene_name"), 
+                        mart=ensembl_mspr)
+
+```
+
+```{r look_at_mouse, message = FALSE}
+
+dim(ensembl_list_mbl6)
+head(ensembl_list_mbl6)
+
+# how many ensembl_gene_id are duplicated empty?
+table(duplicated(ensembl_list_mbl6$ensembl_gene_id)) 
+table(ensembl_list_mbl6$ensembl_gene_id == "")
+
+# how many external.gene.names are duplicated empty?
+table(duplicated(ensembl_list_mbl6$external_gene_name)) 
+table(ensembl_list_mbl6$external_gene_name == "")
+
+# look at duplicated external gene names
+# which of the duplicated external gene names ones are empty?
+dup_ensembl_list_mbl6 <- ensembl_list_mbl6[duplicated(
+  ensembl_list_mbl6$external_gene_name),]
+table(dup_ensembl_list_mbl6$external_gene_name == "")
+
+empty_ensembl_list_mbl6<- dup_ensembl_list_mbl6[
+  dup_ensembl_list_mbl6$external_gene_name == "",]
+nempty_ensembl_list_mbl6<- dup_ensembl_list_mbl6[
+  dup_ensembl_list_mbl6$external_gene_name != "",]
+
+
+# How many times were IDs duplicated (= distribution of mapping number)
+# Taken from Perrine
+table(table(ensembl_list_mbl6$ensembl_gene_id))
+# in this case all were mapped exactly once
+
+# How many times were external_gene_names duplicated 
+table(table(ensembl_list_mbl6$external_gene_name))
+# in this case all were mapped exactly once
+
+```
+
+There are no duplicated or empty ensembl IDs for mouse.
+There are almost 1500 duplicated external_gene_names.
+This means that there are multiple IDs for various genes.
+ISome external_gene_names were even duplicated over 100 times,
+"" was duplicated 1492 times.
+
+```{r look_at_mcar, message = FALSE}
+
+dim(ensembl_list_mcar)
+head(ensembl_list_mcar)
+
+# how many ensembl_gene_id are duplicated empty?
+table(duplicated(ensembl_list_mcar$ensembl_gene_id)) 
+table(ensembl_list_mcar$ensembl_gene_id == "") 
+
+# how many mmusculus_homolog_ensembl_gene are duplicated empty?
+table(duplicated(ensembl_list_mcar$mmusculus_homolog_ensembl_gene)) 
+table(ensembl_list_mcar$mmusculus_homolog_ensembl_gene == "")
+
+# how many mmusculus_homolog_associated_gene_name are duplicated or empty?
+table(duplicated(ensembl_list_mcar$mmusculus_homolog_associated_gene_name)) 
+table(ensembl_list_mcar$mmusculus_homolog_associated_gene_name == "")
+
+# take a look at duplicated
+# how many not empty mmusculus_homolog_ensembl_genes are duplicated?
+table(duplicated(ensembl_list_mcar$mmusculus_homolog_ensembl_gene[
+  ensembl_list_mcar$mmusculus_homolog_ensembl_gene != ""]))
+# how many not empty mmusculus_homolog_associated_gene_name are duplicated?
+table(duplicated(ensembl_list_mcar$mmusculus_homolog_associated_gene_name[
+  ensembl_list_mcar$mmusculus_homolog_associated_gene_name != ""]))
+
+
+# How many times were IDs duplicated (= distribution of mapping number)
+# Taken from Perrine
+table(table(ensembl_list_mcar$ensembl_gene_id))
+
+# How many times were mmusculus_homolog_ensembl_gene duplicated 
+table(table(ensembl_list_mcar$mmusculus_homolog_ensembl_gene))
+# How many times were mmusculus_homolog_associated_gene_name duplicated 
+table(table(ensembl_list_mcar$mmusculus_homolog_associated_gene_name))
+
+```
+
+The ensembl IDs may be duplicated, but they are not empty.
+Some ensembl IDs were duplicated many times.
+The number of duplicated gene names is quite high (10.000) but a lot of 
+those appear to be empty, only around 500 duplicated genes are left.
+
+```{r look_at_mcas, message = FALSE}
+
+dim(ensembl_list_mcas)
+head(ensembl_list_mcas)
+
+# how many ensembl_gene_id are duplicated or empty?
+table(duplicated(ensembl_list_mcas$ensembl_gene_id)) 
+table(ensembl_list_mcas$ensembl_gene_id == "") 
+
+# how many mmusculus_homolog_ensembl_gene are duplicated or empty?
+table(duplicated(ensembl_list_mcas$mmusculus_homolog_ensembl_gene)) 
+table(ensembl_list_mcas$mmusculus_homolog_ensembl_gene == "")
+
+# how many mmusculus_homolog_associated_gene_name are duplicated or empty?
+table(duplicated(ensembl_list_mcas$mmusculus_homolog_associated_gene_name)) 
+table(ensembl_list_mcas$mmusculus_homolog_associated_gene_name == "")
+
+# take a look at duplicated
+# how many not empty mmusculus_homolog_associated_gene_name are duplicated?
+table(duplicated(ensembl_list_mcas$mmusculus_homolog_ensembl_gene[
+  ensembl_list_mcas$mmusculus_homolog_ensembl_gene != ""]))
+# how many not empty mmusculus_homolog_associated_gene_name are duplicated?
+table(duplicated(ensembl_list_mcas$mmusculus_homolog_associated_gene_name[
+  ensembl_list_mcas$mmusculus_homolog_associated_gene_name != ""]))
+
+
+# How many times were IDs duplicated 
+table(table(ensembl_list_mcas$ensembl_gene_id))
+
+# How many times were mmusculus_homolog_ensembl_gene duplicated 
+table(table(ensembl_list_mcas$mmusculus_homolog_ensembl_gene))
+# How many times were mmusculus_homolog_associated_gene_name duplicated 
+table(table(ensembl_list_mcas$mmusculus_homolog_associated_gene_name))
+
+```
+
+Again, few duplicated ensembl_gene_ids but no empty ones.
+Interestingly, mcas ensembl_ids were often not mapped multiple times.
+The cas mmusculus_homolog_associated_gene_names are overwhelmingly empty, but
+there are still around 27725 mmusculus_homolog_ensembl_gene names that are
+neither empty nor duplicated.
+I guess this means that mcas is the least annotated dataset and that 
+mmusculus_homolog_associated_gene_name for mcas doesn't contain that much info.
+
+```{r look_at_mspr, message = FALSE}
+
+dim(ensembl_list_mspr)
+head(ensembl_list_mspr)
+
+# how many ensembl_gene_id are duplicated or empty?
+table(duplicated(ensembl_list_mspr$ensembl_gene_id)) 
+table(ensembl_list_mspr$ensembl_gene_id == "") 
+
+# how many mmusculus_homolog_ensembl_gene are duplicated or empty?
+table(duplicated(ensembl_list_mspr$mmusculus_homolog_ensembl_gene)) 
+table(ensembl_list_mspr$mmusculus_homolog_ensembl_gene == "")
+
+# how many mmusculus_homolog_associated_gene_name are duplicated or empty?
+table(duplicated(ensembl_list_mspr$mmusculus_homolog_associated_gene_name)) 
+table(ensembl_list_mspr$mmusculus_homolog_associated_gene_name == "")
+
+# take a look at duplicated
+# how many not empty mmusculus_homolog_associated_gene_name are duplicated?
+table(duplicated(ensembl_list_mspr$mmusculus_homolog_ensembl_gene[
+  ensembl_list_mspr$mmusculus_homolog_ensembl_gene != ""]))
+# how many not empty mmusculus_homolog_associated_gene_name are duplicated?
+table(duplicated(ensembl_list_mspr$mmusculus_homolog_associated_gene_name[
+  ensembl_list_mspr$mmusculus_homolog_associated_gene_name != ""]))
+
+
+# How many times were IDs duplicated (= distribution of mapping number)
+# Taken from Perrine
+table(table(ensembl_list_mspr$ensembl_gene_id))
+
+# How many times were mmusculus_homolog_ensembl_gene duplicated 
+table(table(ensembl_list_mspr$mmusculus_homolog_ensembl_gene))
+# How many times were mmusculus_homolog_associated_gene_name duplicated 
+table(table(ensembl_list_mspr$mmusculus_homolog_associated_gene_name))
+
+```
+
+Again, few duplicated ensembl_gene_ids but no empty ones.
+For mspr, the number of empty or duplicates gene names is generally not
+quite that high similarly to mouse and mcar.

@@ -1,0 +1,616 @@
+---
+author: "lea wölbert"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries, message = FALSE}
+
+library(rlist)
+library(CellChat)
+library(tidyr)
+
+```
+
+```{r load_convtables, message = FALSE}
+
+hgnc_conv <- read.delim(file = "../data/hgnc_complete_set.txt", header = TRUE)
+
+mgi_conv <- read.delim(file = "../data/HGNC_AllianceHomology.rpt.txt",
+                       header = TRUE)
+
+```
+
+```{r load_dbs, message = FALSE}
+
+ccdb <- CellChatDB.mouse
+mjdb <- read.csv(file = "../data/db_MJ.csv", header = TRUE, sep = ";")
+nmdb <- read.csv(file = "../data/db_natmi.csv", header = TRUE, sep = ",")
+scdb <- read.csv(file = "../data/db_scagecom_m.csv", header = TRUE, sep = ";")
+rmdb <- read.csv(file = "../data/db_rnamagnet.csv", header = TRUE, sep = ";")
+
+```
+
+
+# Build
+
+```{r}
+
+lrdb <- list(
+  interactions = data.frame(interaction_pair = vector("character",
+                                                      length = nrow(mjdb)),
+    ligand_symbol = mjdb$Ligand_GeneSymbol,    
+    ligand_ensembl_id = mjdb$Ligand_ENSEMBL,
+    receptor_symbol = mjdb$Receptor_GeneSymbol,
+    receptor_ensembl_id = mjdb$Receptor_ENSEMBL,
+    interaction_type = vector("character", length = nrow(mjdb))
+  ),
+  sources = data.frame(interaction_pair = vector(mode = "character", 
+                                                 length = nrow(mjdb)),
+    CellChatDB.mouse_row = vector("character", length = nrow(mjdb)), 
+    Mende.et.al_row = vector("character", length = nrow(mjdb)),
+    RNA.Magnet_row = vector("character", length = nrow(mjdb)),
+    interaction_type_source = vector("character", length = nrow(mjdb))
+  ),
+  ligands = data.frame(ligand_ensembl_id = mjdb$Ligand_ENSEMBL,
+    ligand_symbol = mjdb$Ligand_GeneSymbol,
+    ligand_hgnc_id = vector("character", length = nrow(mjdb)),
+    ligand_hgnc_symbol_h = vector("character", length = nrow(mjdb))
+  ),
+  receptors = data.frame(receptor_ensembl_id = mjdb$Receptor_ENSEMBL,
+    receptor_symbol = mjdb$Receptor_GeneSymbol,
+    receptor_hgnc_id = vector("character", length = nrow(mjdb)),
+    receptor_hgnc_symbol_h = vector("character", length = nrow(mjdb))
+  )
+)
+
+```
+
+```{r interaction_pairs, message = FALSE}
+
+lrdb$interactions$interaction_pair <- paste(lrdb$interactions$ligand_symbol, 
+                                            lrdb$interactions$receptor_symbol, 
+                                            sep = "&")
+lrdb$sources$interaction_pair <- paste(lrdb$interactions$ligand_symbol,
+                                       lrdb$interactions$receptor_symbol, 
+                                       sep = "&")
+table(duplicated(lrdb$interactions$interaction_pair))
+
+```
+
+# Expand
+
+## Mende DB
+
+```{r source_mjdb, message = FALSE}
+
+# use a little trick by altering mjdb to also contain interaction pairs
+mjdb$pair <- paste(mjdb$Ligand_GeneSymbol, mjdb$Receptor_GeneSymbol, sep = "&")
+
+lrdb$sources$Mende.et.al_row <- paste(match(lrdb$interactions$interaction_pair, 
+                                            mjdb$pair))
+
+```
+
+## CellChat DB
+
+```{r compare_mono_ccdb, message = FALSE}
+
+ccdb <- CellChatDB.mouse
+
+# directly match monomeric interactions
+ccdb_monomeric <- ccdb$interaction[-grep("[+]", 
+                                         ccdb$interaction$interaction_name_2),]
+length(grep("[&]", ccdb_monomeric$interaction_name_2))
+# over 1000 monomeric interactions
+
+# remove space to match to lrdb
+ccdb_monomeric$interaction_name_2 <- gsub("  - ", "&", 
+                                          ccdb_monomeric$interaction_name_2 )
+table(!is.na(match(ccdb_monomeric$interaction_name_2, 
+                   lrdb$interactions$interaction_pair)))
+table(!is.na(match(lrdb$interactions$interaction_pair,
+                   ccdb_monomeric$interaction_name_2)))
+# around 500 monomeric interactons in ccdb are found in lrdb
+# around 600 monomeric interactions in ccdb are additional to lrdb
+
+to_add_mono_ccdb <- ccdb_monomeric$interaction_name_2[which(is.na(match(
+  ccdb_monomeric$interaction_name_2, lrdb$interactions$interaction_pair)))]
+length(to_add_mono_ccdb)
+
+# add by rbind
+
+add_mono_ccdb <- list(
+  interactions = data.frame(interaction_pair = to_add_mono_ccdb,
+    ligand_symbol = ccdb_monomeric$ligand[which(is.na(match(
+  ccdb_monomeric$interaction_name_2, lrdb$interactions$interaction_pair)))],    
+    ligand_ensembl_id = vector("character", length = length(to_add_mono_ccdb)),
+    receptor_symbol = ccdb_monomeric$receptor[which(is.na(match(
+  ccdb_monomeric$interaction_name_2, lrdb$interactions$interaction_pair)))],
+    receptor_ensembl_id = vector("character", 
+                                 length = length(to_add_mono_ccdb)),
+    interaction_type = vector("character", 
+                                 length = length(to_add_mono_ccdb))
+  ),
+  sources = data.frame(interaction_pair = to_add_mono_ccdb,
+    CellChatDB.mouse_row = vector("character", 
+                                  length = length(to_add_mono_ccdb)), 
+    Mende.et.al_row = rep("NA", length = length(to_add_mono_ccdb)),
+    RNA.Magnet_row = vector("character", length = length(to_add_mono_ccdb)),
+    interaction_type_source = vector("character", 
+                                  length = length(to_add_mono_ccdb))
+  ),
+  ligands = data.frame(ligand_ensembl_id = vector(
+    "character", length = length(to_add_mono_ccdb)),
+    ligand_symbol = ccdb_monomeric$ligand[which(is.na(match(
+  ccdb_monomeric$interaction_name_2, lrdb$interactions$interaction_pair)))],
+    ligand_hgnc_id = vector("character", length = length(to_add_mono_ccdb)),
+    ligand_hgnc_symbol_h = vector("character", 
+                                  length = length(to_add_mono_ccdb))
+  ),
+  receptors = data.frame(receptor_ensembl_id = vector(
+    "character", length = length(to_add_mono_ccdb)),
+    receptor_symbol = ccdb_monomeric$receptor[which(is.na(match(
+  ccdb_monomeric$interaction_name_2, lrdb$interactions$interaction_pair)))],
+    receptor_hgnc_id = vector("character", length = length(to_add_mono_ccdb)),
+    receptor_hgnc_symbol_h = vector(
+      "character", length = length(to_add_mono_ccdb))
+  )
+)
+
+nrow(lrdb$interactions)
+nrow(add_mono_ccdb$interactions)
+
+
+lrdb$interactions <- rbind(lrdb$interactions, add_mono_ccdb$interactions)
+lrdb$sources <- rbind(lrdb$sources, add_mono_ccdb$sources)
+lrdb$ligands <- rbind(lrdb$ligands, add_mono_ccdb$ligands)
+lrdb$receptors <- rbind(lrdb$receptors, add_mono_ccdb$receptors)
+
+nrow(lrdb$interactions)
+tail(lrdb$interactions)
+tail(lrdb$sources)
+
+table(duplicated(lrdb$interaction$interaction_pair))
+
+```
+
+
+```{r compare_multi_ccdb, message = FALSE}
+
+ccdb <- CellChatDB.mouse
+ccdb$interaction$original_row[1:2021] <- paste(1:2021)
+
+ccdb_multi<- ccdb$interaction[grep("[+]", ccdb$interaction$interaction_name_2),]
+# still around 900 interactions, so at least 1800 monomeric
+
+# are there interactions with multiple ligands?
+length(grep("[[:alnum:]]+[_]+[[:alnum:]]+", ccdb_multi$ligand))
+ccdb_multi[grep("[[:alnum:]]+[_]+[[:alnum:]]+", ccdb_multi$ligand),]
+# yes, three. For easier coding, filter these out
+ccdb_multi <- ccdb_multi[-grep("[[:alnum:]]+[_]+[[:alnum:]]+", 
+                               ccdb_multi$ligand),]
+
+# change the interaction name to make it easier to split and compare
+ccdb_multi$interaction_name_2 <- gsub("[[:print:]]+[(]", "",
+                                      ccdb_multi$interaction_name_2)
+ccdb_multi$interaction_name_2 <- gsub("[)]", "", ccdb_multi$interaction_name_2)
+ccdb_multi$interaction_name_2 <- gsub("[+]", "-", ccdb_multi$interaction_name_2)
+# insert into receptor column
+ccdb_multi$receptor <- ccdb_multi$interaction_name_2
+
+# separate according to receptor column
+ccdb_multi <- separate_rows(ccdb_multi, receptor,  sep = "-", convert = TRUE)
+
+# add interaction pair in the same format into new column for comparison to lrdb
+ccdb_multi$interaction_name_3 <- paste(ccdb_multi$ligand, 
+                                       ccdb_multi$receptor, sep = "&")
+
+# around 1250 of these interactions are not found in lrdb
+table(is.na(match(ccdb_multi$interaction_name_3
+                  , lrdb$interactions$interaction_pair)))
+
+
+```
+
+I might come back to this later when I have a better idea how to do this and
+if I should do it.
+
+```{r source_mono_ccdb, message = FALSE}
+
+# use a little trick by altering ccdb
+ccdb$interaction$interaction_name_2 <- gsub("  - ", "&",
+                                            ccdb$interaction$interaction_name_2)
+
+table(is.na(match(ccdb$interaction$interaction_name_2, 
+                  lrdb$interactions$interaction_pair)))
+table(is.na(match(lrdb$interactions$interaction_pair, 
+                  ccdb$interaction$interaction_name_2)))
+# around 1100 pairs are shared between both dbs
+
+# add the source
+
+# get the shared pairs and corresponding positions in the dbs
+shared_pairs_ccdb <- ccdb$interaction$interaction_name_2[which(!is.na(match(
+  ccdb$interaction$interaction_name_2, lrdb$interactions$interaction_pair)))]
+
+lrdb_pos <- which(!is.na(match(lrdb$interactions$interaction_pair, 
+                               shared_pairs_ccdb)))
+ccdb_pos <- which(!is.na(match(ccdb$interaction$interaction_name_2,
+                               shared_pairs_ccdb)))
+fillin_lrdb <- match(ccdb$interaction$interaction_name_2[ccdb_pos],
+                     lrdb$interactions$interaction_pair[lrdb_pos])
+
+# to check if they correspond
+head(match(ccdb$interaction$interaction_name_2[ccdb_pos], 
+      lrdb$interactions$interaction_pair[lrdb_pos][fillin_lrdb]))
+      
+# add to lrdb
+lrdb$interactions$interaction_type[lrdb_pos][
+  fillin_lrdb] <- ccdb$interaction$annotation[ccdb_pos]
+lrdb$sources$CellChatDB.mouse_row[lrdb_pos][fillin_lrdb] <- ccdb_pos
+lrdb$sources$interaction_type_source[lrdb_pos][fillin_lrdb] <- paste(
+  lrdb$sources$interaction_type_source[lrdb_pos][fillin_lrdb], 
+  "CellChatDB.mouse", sep = " ")
+
+table(duplicated(lrdb$interactions$interaction_pair))
+tail(lrdb$interactions)
+tail(lrdb$sources)
+
+```
+
+### Checkpoint
+
+```{r checkpoint1_save, message = FALSE}
+
+list.save(lrdb, file = "../data/lrdb_001.rds")
+
+```
+
+```{r checkpoint1_load, message = FALSE}
+
+lrdb <- list.load(file = "../data/lrdb_001.rds")
+
+```
+
+
+## RNA Magnet DB
+
+```{r compare_mono_rmdb, message = FALSE}
+
+rmdb <- read.csv(file = "../data/db_rnamagnet.csv", header = TRUE, sep = ";")
+
+rmdb_mono <- rmdb[-grep("&", rmdb$Pair.Name),]
+# almost 2000 monomeric interactions
+rmdb_mono <- rmdb_mono[rmdb_mono$ManualAnnotation != "Incorrect",]
+rmdb_mono <- rmdb_mono[rmdb_mono$ManualAnnotation != "Scavenger",]
+unique(rmdb_mono$ManualAnnotation)
+# of those, some have manual annotation "Inorrect" or "Scavenger" 
+# these will be removed
+# around 1700 pairs are left
+
+# convert for ease
+rmdb_mono$Pair.Name <- gsub("-", "&", rmdb_mono$Pair.Name)
+
+table(is.na(match(rmdb_mono$Pair.Name, lrdb$interactions$interaction_pair)))
+# around 500 interactions from rmdb are not included in lrdb yet
+
+rmdb_pairs <- rmdb_mono$Pair.Name[which(is.na(match(
+  rmdb_mono$Pair.Name, lrdb$interactions$interaction_pair)))]
+# of those, some are concatenated with | so these will be removed also
+rmdb_pairs <- rmdb_pairs[-grep("[|]", rmdb_pairs)]
+rmdb_mono <- rmdb_mono[-grep("[|]", rmdb_mono$Pair.Name),]
+# now around 300 pairs are left to add by rbind
+
+add_mono_rmdb <- list(
+  interactions = data.frame(interaction_pair = rmdb_pairs,
+    ligand_symbol = rmdb_mono$Ligand.Mouse[which(is.na(match(
+  rmdb_mono$Pair.Name, lrdb$interactions$interaction_pair)))],    
+    ligand_ensembl_id = vector("character", length = length(rmdb_pairs)),
+    receptor_symbol = rmdb_mono$Receptor.Mouse[which(is.na(match(
+  rmdb_mono$Pair.Name, lrdb$interactions$interaction_pair)))],
+    receptor_ensembl_id = vector("character", length = length(rmdb_pairs)),
+    interaction_type = vector("character", length = length(rmdb_pairs))
+  ),
+  sources = data.frame(interaction_pair = rmdb_pairs,
+    CellChatDB.mouse_row = rep("NA", length = length(rmdb_pairs)), 
+    Mende.et.al_row = rep("NA", length = length(rmdb_pairs)),
+    RNA.Magnet_row = vector("character", length = length(rmdb_pairs)),
+    interaction_type_source = vector("character", length = length(rmdb_pairs))
+  ),
+  ligands = data.frame(ligand_ensembl_id = vector(
+    "character", length = length(rmdb_pairs)),
+    ligand_symbol = rmdb_mono$Ligand.Mouse[which(is.na(match(
+  rmdb_mono$Pair.Name, lrdb$interactions$interaction_pair)))],
+    ligand_hgnc_id = vector("character", length = length(rmdb_pairs)),
+    ligand_hgnc_symbol_h = vector("character", length = length(rmdb_pairs))
+  ),
+  receptors = data.frame(receptor_ensembl_id = vector(
+    "character", length = length(rmdb_pairs)),
+    receptor_symbol = rmdb_mono$Receptor.Mouse[which(is.na(match(
+  rmdb_mono$Pair.Name, lrdb$interactions$interaction_pair)))],
+    receptor_hgnc_id = vector("character", length = length(rmdb_pairs)),
+    receptor_hgnc_symbol_h = vector("character", length = length(rmdb_pairs))
+  )
+)
+nrow(lrdb$interactions)
+nrow(add_mono_rmdb$interactions)
+
+lrdb$interactions <- rbind(lrdb$interactions, add_mono_rmdb$interactions)
+lrdb$sources <- rbind(lrdb$sources, add_mono_rmdb$sources)
+lrdb$ligands <- rbind(lrdb$ligands, add_mono_rmdb$ligands)
+lrdb$receptors <- rbind(lrdb$receptors, add_mono_rmdb$receptors)
+tail(lrdb$interactions)
+tail(lrdb$sources)
+
+table(duplicated(lrdb$interaction$interaction_pair))
+
+```
+
+
+```{r compare_multi_rmdb, message = FALSE}
+
+rmdb <- read.csv(file = "../data/db_rnamagnet.csv", header = TRUE, sep = ";")
+
+rmdb_multi <- rmdb[grep("&", rmdb$Pair.Name),]
+# around 140 interactions, so at least 1800 monomeric
+
+length(grep("[[:alnum:]]+[&]+[[:alnum:]]+", rmdb_multi$Pair.Name))
+length(grep("[[:alnum:]]+[&]+[[:alnum:]]+[&]+[[:alnum:]]+",
+            rmdb_multi$Pair.Name))
+# one of those interactions involves more than two R or Ls
+
+# there are some interactions that are concatenated with |
+# without these, it's just extra 120 pairs left (so 240 additional pairs)
+rmdb_multi <- rmdb_multi[-grep("[|]", rmdb_multi$Pair.Name),]
+
+
+# split the receptor.mouse and ligand.mouse columns whenever there is a &
+rmdb_multi <- separate_rows(rmdb_multi, Receptor.Mouse,
+                            Ligand.Mouse, sep = "&", convert = TRUE)
+rmdb_multi$Pair.Name2 <- paste(rmdb_multi$Ligand.Mouse,
+                               rmdb_multi$Receptor.Mouse, sep = "-")
+# did not convert to & directly so I can take a look at it first
+
+# compare to lrdb
+# convert to & now
+rmdb_multi$Pair.Name2 <- gsub("-", "&", rmdb_multi$Pair.Name2)
+
+unique(rmdb_multi$ManualAnnotation)
+# all of these are annotated as correct
+
+table(is.na(match(rmdb_multi$Pair.Name2, lrdb$interactions$interaction_pair)))
+table(is.na(match(rmdb_multi$Pair.Name2, rmdb_mono$Pair.Name)))
+# there are around 130 interactions in RNAmagnet which are not in lrdb
+# there are also 5 pairs in rmdb multi which are already in rmdb_mono
+# filter them out to avoid confusion
+
+rmdb_multi <- rmdb_multi[which(is.na(match(rmdb_multi$Pair.Name2, 
+                                           rmdb_mono$Pair.Name))),]
+
+# get the pairs to be added
+rmdb_pairs_multi <- rmdb_multi$Pair.Name2[which(is.na(match(
+  rmdb_multi$Pair.Name2, lrdb$interactions$interaction_pair)))]
+# | were already removed beforehand
+
+# some pairs are duplicated
+rmdb_pairs_multi <- rmdb_pairs_multi[duplicated(rmdb_pairs_multi) == FALSE]
+# also remove those from rmdb_multi
+rmdb_multi <- rmdb_multi[duplicated(rmdb_multi$Pair.Name2) == FALSE,]
+
+# Here, I will not add info on source directly because is overwritten later
+add_multi_rmdb <- list(
+  interactions = data.frame(interaction_pair = rmdb_pairs_multi,
+    ligand_symbol = rmdb_multi$Ligand.Mouse[which(is.na(match(
+  rmdb_multi$Pair.Name2, lrdb$interactions$interaction_pair)))],    
+    ligand_ensembl_id = vector("character", length = length(rmdb_pairs_multi)),
+    receptor_symbol = rmdb_multi$Receptor.Mouse[which(is.na(match(
+  rmdb_multi$Pair.Name2, lrdb$interactions$interaction_pair)))],
+    receptor_ensembl_id = vector("character", length = length(rmdb_pairs_multi)),
+    interaction_type = vector("character", length = length(rmdb_pairs_multi))
+  ),
+  sources = data.frame(interaction_pair = rmdb_pairs_multi,
+    CellChatDB.mouse_row = rep("NA", length = length(rmdb_pairs_multi)), 
+    Mende.et.al_row = rep("NA", length = length(rmdb_pairs_multi)),
+    RNA.Magnet_row = vector("character", length = length(rmdb_pairs_multi)),
+    interaction_type_source = vector("character", 
+                                     length = length(rmdb_pairs_multi))
+  ),
+  ligands = data.frame(ligand_ensembl_id = vector(
+    "character", length = length(rmdb_pairs_multi)),
+    ligand_symbol = rmdb_multi$Ligand.Mouse[which(is.na(match(
+  rmdb_multi$Pair.Name2, lrdb$interactions$interaction_pair)))],
+    ligand_hgnc_id = vector("character", length = length(rmdb_pairs_multi)),
+    ligand_hgnc_symbol_h = vector("character", 
+                                  length = length(rmdb_pairs_multi))
+  ),
+  receptors = data.frame(receptor_ensembl_id = vector(
+    "character", length = length(rmdb_pairs_multi)),
+    receptor_symbol = rmdb_multi$Receptor.Mouse[which(is.na(match(
+  rmdb_multi$Pair.Name2, lrdb$interactions$interaction_pair)))],
+    receptor_hgnc_id = vector("character", length = length(rmdb_pairs_multi)),
+    receptor_hgnc_symbol_h = vector("character", 
+                                    length = length(rmdb_pairs_multi))
+  )
+)
+
+nrow(lrdb$interactions)
+nrow(add_multi_rmdb$interactions)
+
+lrdb$interactions <- rbind(lrdb$interactions, add_multi_rmdb$interactions)
+lrdb$sources <- rbind(lrdb$sources, add_multi_rmdb$sources)
+lrdb$ligands <- rbind(lrdb$ligands, add_multi_rmdb$ligands)
+lrdb$receptors <- rbind(lrdb$receptors, add_multi_rmdb$receptors)
+tail(lrdb$interactions)
+tail(lrdb$sources)
+
+table(duplicated(lrdb$interaction$interaction_pair))
+
+# add source row to interactions that were already in the database
+# for this, split rmdb with original columns without subsetting
+
+```
+
+I might come back to this later when I have a better idea how to do this and
+if I should do it.
+
+```{r source_mono_rmdb, message = FALSE}
+
+rmdb <- read.csv(file = "../data/db_rnamagnet.csv", header = TRUE, sep = ";")
+
+# use a little trick by altering ccdb
+rmdb$original_row[1:2000] <- paste(1:2000)
+rmdb_split<- separate_rows(rmdb, Receptor.Mouse, Ligand.Mouse, 
+                           sep = "&", convert = TRUE)
+rmdb_split$Pair.Name2 <- paste(rmdb_split$Ligand.Mouse, 
+                               rmdb_split$Receptor.Mouse, sep = "&")
+rmdb_split <- rmdb_split[duplicated(rmdb_split$Pair.Name2) == FALSE,]
+
+table(is.na(match(rmdb_split$Pair.Name2, lrdb$interactions$interaction_pair)))
+table(is.na(match(lrdb$interactions$interaction_pair, rmdb_split$Pair.Name2)))
+# around 1950 pairs are shared between both dbs
+# including pairs that were split from RNAMagnet multimeric pairs
+
+# add the source
+
+# get the shared pairs and corresponding positions in the dbs
+shared_pairs_rmdb <- rmdb_split$Pair.Name2[which(!is.na(match(
+  rmdb_split$Pair.Name2, lrdb$interactions$interaction_pair)))]
+
+lrdb_pos <- which(!is.na(match(lrdb$interactions$interaction_pair, 
+                               shared_pairs_rmdb)))
+rmdb_pos <- which(!is.na(match(rmdb_split$Pair.Name2, shared_pairs_rmdb)))
+fillin_lrdb <- match(rmdb_split$Pair.Name2[rmdb_pos],
+                     lrdb$interactions$interaction_pair[lrdb_pos])
+
+# to check if they correspond
+head(match(rmdb_split$Pair.Name2[rmdb_pos], 
+      lrdb$interactions$interaction_pair[lrdb_pos][fillin_lrdb]))
+      
+# add to lrdb
+lrdb$interactions$interaction_type[lrdb_pos][fillin_lrdb] <- paste(
+  lrdb$interactions$interaction_type[lrdb_pos][fillin_lrdb], 
+  rmdb_split$Ligand.CC[rmdb_pos], sep = ";")
+lrdb$sources$RNA.Magnet_row[
+  lrdb_pos][fillin_lrdb] <- rmdb_split$original_row[rmdb_pos]
+lrdb$sources$interaction_type_source[lrdb_pos][fillin_lrdb] <- paste(
+  lrdb$sources$interaction_type_source[lrdb_pos][fillin_lrdb], 
+  "RNA.Magnet", sep = ";")
+
+tail(lrdb$interactions)
+tail(lrdb$sources)
+
+table(duplicated(lrdb$sources$RNA.Magnet_row[
+  lrdb$sources$RNA.Magnet_row != ""]))
+table(table(lrdb$sources$RNA.Magnet_row[lrdb$sources$RNA.Magnet_row != ""]))
+
+# subset a dataframe that contains all duplicated RNA.Magnet rows
+dups <- lrdb$sources[lrdb$sources$RNA.Magnet_row != "",][
+  which(!is.na(match(lrdb$sources$RNA.Magnet_row[
+    lrdb$sources$RNA.Magnet_row != ""], 
+    lrdb$sources$RNA.Magnet_row[
+      lrdb$sources$RNA.Magnet_row != ""][
+        duplicated(lrdb$sources$RNA.Magnet_row[
+          lrdb$sources$RNA.Magnet_row != ""])]))),]
+
+# order them to see if if fits
+dups[order(dups$RNA.Magnet_row),]
+
+# now trace back to rmdb to check whether these positions are really positions
+# of multimeric interactoin pairs
+rmdb[unique(dups$RNA.Magnet_row),]
+# yes
+
+```
+
+```{r remove_inc_rmdb, message = FALSE}
+
+# check if there are "Incorrect" pairs in lrdb
+unique(rmdb_split$ManualAnnotation)
+
+# Ideally, many NAs would be great
+table(is.na(match(lrdb$interactions$interaction_pair, 
+                  rmdb_split$Pair.Name2[grep("Incorrect", 
+                                             rmdb_split$ManualAnnotation)])))
+table(is.na(match(lrdb$interactions$interaction_pair,
+                  rmdb_split$Pair.Name2[grep("Scavenger",
+                                             rmdb_split$ManualAnnotation)])))
+
+# incorrect: false mappings from previous sources
+# irrelevant: interactions involving activated complement system components
+# scavenger: no idea
+# not expressed = not expressed in BM
+
+# they only used 721 pairs with annotation ("Correct") (supp figure 9a)
+# I decide to remove only incorrect and scavenger
+
+pos_remove <- c(
+  which(!is.na(match(lrdb$interactions$interaction_pair,
+    rmdb_split$Pair.Name2[grep("Incorrect", rmdb_split$ManualAnnotation)]))),
+  which(!is.na(match(lrdb$interactions$interaction_pair, 
+    rmdb_split$Pair.Name2[grep("Scavenger", rmdb_split$ManualAnnotation)]))))
+
+# check if the positions to remove are correct
+lrdb$interactions[pos_remove,][
+  order(lrdb$interactions$interaction_pair[pos_remove]),]
+
+rmdb_split[which(!is.na(match(
+  rmdb_split$Pair.Name2, 
+  lrdb$interactions$interaction_pair[pos_remove]))),][order(
+    rmdb_split$Pair.Name2[which(!is.na(match(
+      rmdb_split$Pair.Name2,
+      lrdb$interactions$interaction_pair[pos_remove])))]),]
+# yes, these are the same interactions
+
+table(is.na(match(lrdb$interactions$interaction_pair[-pos_remove], 
+                  rmdb_split$Pair.Name2[grep("Incorrect",
+                                             rmdb_split$ManualAnnotation)])))
+table(is.na(match(lrdb$interactions$interaction_pair[-pos_remove], 
+                  rmdb_split$Pair.Name2[grep("Scavenger",
+                                             rmdb_split$ManualAnnotation)])))
+# looks like it
+
+lrdb$interactions <- lrdb$interactions[-pos_remove,]
+lrdb$sources <- lrdb$sources[-pos_remove,]
+lrdb$ligands <- lrdb$ligands[-pos_remove,]
+lrdb$receptors <- lrdb$receptors[-pos_remove,]
+
+tail(lrdb$interactions)
+tail(lrdb$sources)
+
+# annoyingly, the "rownames" did not change, so the last "rowname" is 3066
+# in a df that only has 2983 rows.
+
+```
+
+### Checkpoint
+
+```{r checkpoint2_look, message = FALSE}
+
+table(lrdb$interaction$interaction_type[
+  lrdb$interaction$interaction_type != ""])
+# overall, the annotations correspond well with few exceptions where
+# one db claims secretion while the other claims membrane-bound
+
+nrow(lrdb$interactions)
+# So far, around 2800 interactions are captured in lrdb
+
+table(lrdb$interactions$interaction_type == "")
+# around 550 interactions are not yet annotated
+
+```
+
+```{r checkpoint2_save, message = FALSE}
+
+list.save(lrdb, file = "../data/lrdb_002.rds")
+
+```
+
+```{r checkpoint2_load, message = FALSE}
+
+lrdb <- list.load(file = "../data/lrdb_002.rds")
+
+```

@@ -1,0 +1,166 @@
+---
+author: "lea wölbert"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries, message = FALSE}
+
+library(CellChat)
+
+```
+
+This script is just to look at the databases I might use to build my lrdb.
+
+# Conversion tables
+
+```{r hgnc_conv, message = FALSE}
+
+# this is a conversion table from HGNC symbol to HGNC ID
+
+hgnc_conv <- read.delim(file = "../../data/databases/hgnc_complete_set.txt", 
+                        header = TRUE)
+# downloaded from http://www.informatics.jax.org/downloads/reports/HGNC_AllianceHomology.rpt
+# 21.09.2021
+
+table(duplicated(hgnc_conv$hgnc_id))
+# no duplicates in the HGNC ids
+
+# include:
+# symbol 
+# hgnc_id
+
+```
+
+```{r mgi_conv, message = FALSE}
+
+# this is a conversion table from ensembl ID to HGNC ID
+
+mgi_conv <- read.delim(file = "../../data/databases/HGNC_AllianceHomology.rpt.txt",
+                       header = TRUE)
+# downloaded from http://www.informatics.jax.org/downloads/reports/HGNC_AllianceHomology.rpt
+# 21.09.2021
+# the column names are not correctly assigned but that's ok for now
+
+table(duplicated(mgi_conv$NCBI.Gene.strand[mgi_conv$NCBI.Gene.strand != "null"]))
+table(duplicated(mgi_conv$CCDS.IDs[mgi_conv$CCDS.IDs != "null"]))
+# there are some duplicates but the majority is not duplicated
+
+# include:
+# MGI.Accession.ID = symbol
+# NCBI.Gene.strand = Ensembl.Gene.ID
+# CCDS.IDs = HGNC.ID
+
+```
+
+# External Databases
+
+```{r ccdb, message = FALSE}
+
+# ccdb = CellChatDB
+ccdb <- CellChatDB.mouse
+# from the R package CellChat
+
+ccdb
+table(duplicated(ccdb$geneInfo$Ensembl.Gene.ID[
+  ccdb$geneInfo$Ensembl.Gene.ID != "null"]))
+
+# CCDB has ensembl IDs and also basically contains mgi_conv for
+# the respective genes
+
+# contains subunits, so will be a bit more difficult to incorporate
+# contains annotation
+# will be useful to add information but not useful to start the lrdb
+
+# include:
+# ligand
+# receptor
+# annotation
+# pathway_name
+# Symbol
+# Ensembl.Gene.ID
+# HGNC.ID
+
+```
+
+
+```{r mjdb, message = FALSE}
+
+# mjdb = Mende/Jolly Database
+
+mjdb <- read.csv(file = "../../data/databases/db_MJ.csv", 
+                 header = TRUE, sep = ";")
+# from supplementary file 2 
+
+table(duplicated(mjdb$Receptor_ENSEMBL))
+table(duplicated(mjdb$Ligand_ENSEMBL))
+# mjdb already has the ensembl ids in the order I want but no slots for sources
+# because the ensembl IDs are added in the same rows as the interactions,
+# they are often duplicated
+
+# I think this is a good basis to start building the dlrb
+
+# include:
+# Receptor_ENSEMBL
+# Ligand_ENSEMBL
+# Receptor_GeneSymbol
+# Ligand_GeneSymbol
+
+```
+
+
+
+```{r nmdb, message = FALSE}
+
+# nmdb = natmi database
+
+nmdb <- read.csv(file = "../../data/databases/db_natmi.csv",
+                 header = TRUE, sep = ",")
+# from the cloned repository  https://github.com/CyrilLagger/scDiffCom.git
+
+nmdb
+# nmdb only uses human gene symbols, which can be converted to ensmus IDs
+# maybe use to add additional interactions if required 
+
+```
+
+
+
+```{r scdb, message = FALSE}
+
+# scdb = scAgeCom DB
+
+scdb <- read.csv(file = "../../data/databases/db_scagecom_m.csv", 
+                 header = TRUE, sep = ";")
+# downloaded from https://www.biorxiv.org/content/biorxiv/early/2021/08/15/2021.08.13.456238/DC1/embed/media-1.xlsx?download=true
+# supplementary table 1 
+
+scdb
+# only gene symbols
+# multimeric, so maybe difficult to integrate
+
+```
+
+```{r rmdb, message = FALSE}
+
+# rmdb = RNAMagnet Database
+
+rmdb <- read.csv(file = "../../data/databases/db_rnamagnet.csv", 
+                 header = TRUE, sep = ";")
+# downloaded from supplementary table https://static-content.springer.com/esm/art%3A10.1038%2Fs41556-019-0439-6/MediaObjects/41556_2019_439_MOESM3_ESM.xlsx
+
+# doesn't have IDs but has symbols, sources, annotations, and GO
+# also has KEGG ID
+# is multimeric so may be difficult to incorporate
+
+rmdb[rmdb$ManualAnnotation == "Correct",]
+# 721 manually annotated Pairs
+
+# include:
+# Ligand.CC = Annotation
+
+```
+
